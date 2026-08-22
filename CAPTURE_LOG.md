@@ -6,6 +6,38 @@ Homes LLC", captured 2026-08-20. Dollar amounts, job names, addresses, people,
 and dates throughout the app are invented — only structure/labels/fields below
 are observed.
 
+## Backend note: OpenAPI spec for agent tool-calling
+
+`openapi/schedule-estimate.yaml` (OpenAPI 3.0.3) documents all 11 Schedule
+and Estimate API operations, written for consumption by an agent
+framework's OpenAPI-to-tool machinery (e.g. Google ADK's
+`OpenAPIToolset`) — every operation has a unique `operationId`, and
+descriptions call out real side effects and gaps (estimate group
+auto-materialization, PUT-replaces-the-whole-row semantics, the synthetic
+"unassigned" group's absent `createdAt`, etc.), not just field names.
+No `security` scheme anywhere — confirmed local-only, no auth. Served live
+at `GET http://localhost:4000/openapi.yaml` (re-read from disk on every
+request, so editing the YAML doesn't need a server restart).
+
+Enums in the spec (schedule `color`/`reminder`, estimate `costCode`/
+`costType`) carry the same "observed vs. invented" flags already used
+throughout this file — e.g. schedule `phase` is spec'd but explicitly
+marked invented, matching its status elsewhere in this log.
+
+One real bug fixed alongside the spec: `POST /api/schedule` previously
+500'd (uncaught exception) if `start`/`end` were omitted, since those
+DB columns are `NOT NULL` but the handler only validated `jobId`/`title`.
+Now returns a clean `400` instead — `server/index.js`'s validation for
+that route. `costCode` on estimate items was deliberately left
+server-unenforced (UI-only convention, not a DB constraint) — the spec
+marks it required to match the *intended* contract but says so in its
+description rather than silently enforcing new behavior.
+
+Validate the spec anytime with `npx @redocly/cli lint
+openapi/schedule-estimate.yaml --skip-rule security-defined --skip-rule
+info-license --skip-rule no-server-example.com` (those three skips are
+expected/intentional for a local, unauthenticated dev spec).
+
 ## Backend note: Schedule now has a real SQLite database
 
 Schedule items (only — jobs/clients/subs-vendors stay static frontend

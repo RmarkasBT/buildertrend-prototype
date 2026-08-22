@@ -1,0 +1,848 @@
+openapi: 3.0.3
+info:
+  title: Buildertrend Mock — Schedule & Estimate API
+  version: 1.0.0
+  description: |
+    Local-only, unauthenticated REST API backing the Schedule and Estimate
+    features of a Buildertrend front-end mock (see the repo's
+    CAPTURE_LOG.md for what in this app is captured from the real product
+    vs. invented for demo purposes). No `security` scheme is defined
+    anywhere in this document — that's intentional, not an omission; this
+    server only ever runs on localhost for local development/agent use.
+
+    This spec is written to be consumed by an agent framework's
+    OpenAPI-to-tool machinery (e.g. Google ADK's `OpenAPIToolset`), which
+    turns every operation below into a callable function: `operationId`
+    becomes the function name, `summary`/`description` become what the
+    calling LLM reads to decide when/how to use it, and `parameters`/
+    `requestBody` become its typed arguments. Every operation's
+    description therefore documents not just *what* it does but its real
+    side effects and known gaps — so an agent doesn't have to discover
+    them by trial and error.
+servers:
+  - url: http://localhost:4000
+    description: Local dev server (npm run dev / npm run dev:server)
+
+tags:
+  - name: Schedule
+    description: Per-job schedule items (tasks/milestones) — server/routes.js.
+  - name: Estimate
+    description: Per-job estimate worksheet (groups + line items) — server/estimateRoutes.js.
+
+paths:
+  /api/schedule:
+    get:
+      operationId: listScheduleItems
+      tags: [Schedule]
+      summary: List all schedule items for a job.
+      description: |
+        Returns every schedule item belonging to the given job, ordered by
+        start date then id. Returns an empty array (not an error) if the
+        job has no items yet.
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+      responses:
+        '200':
+          description: Array of schedule items for the job (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScheduleItem'
+        '400':
+          $ref: '#/components/responses/MissingJobId'
+    post:
+      operationId: createScheduleItem
+      tags: [Schedule]
+      summary: Create a new schedule item (task or milestone) for a job.
+      description: |
+        Creates a schedule item under the given job and returns it with
+        server-assigned `id`, `createdBy`, `createdAt`, and `updatedAt`.
+
+        Required fields: `jobId`, `title`, `start`, `end`. All other
+        fields are optional and fall back to sensible defaults (see
+        ScheduleItemInput's per-field descriptions) — this mirrors the
+        real "New Schedule Item" form, where only Title/Start Date/End
+        Date are marked required.
+
+        `createdBy` is always server-set to a fixed demo user regardless
+        of what you send — there is no real user/auth concept in this
+        mock, so don't bother supplying it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleItemInput'
+            example:
+              jobId: j1
+              title: Final Walkthrough
+              start: '2026-09-01'
+              end: '2026-09-01'
+      responses:
+        '201':
+          description: The created schedule item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleItem'
+        '400':
+          description: One or more required fields (jobId, title, start, end) are missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/schedule/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ScheduleItemId'
+    put:
+      operationId: updateScheduleItem
+      tags: [Schedule]
+      summary: Replace an existing schedule item's fields.
+      description: |
+        Updates the schedule item identified by `id`. **This is a full
+        replace, not a partial patch** — every field in the request body
+        is written, and any field you omit falls back to
+        ScheduleItemInput's default (e.g. an omitted `color` resets to
+        `"Victoria"`, an omitted `progress` resets to `0`) rather than
+        keeping its previous value. If you only want to change one field,
+        first fetch the item (via listScheduleItems), then send the full
+        object back with just that one field changed.
+
+        `jobId` in the request body is accepted but silently ignored —
+        an item can never change which job it belongs to via this
+        endpoint; the response's `jobId` always matches the item's
+        original job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleItemInput'
+      responses:
+        '200':
+          description: The updated schedule item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteScheduleItem
+      tags: [Schedule]
+      summary: Delete a schedule item.
+      description: Permanently deletes the schedule item identified by `id`. No response body on success.
+      responses:
+        '204':
+          description: Deleted successfully. No response body.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/estimate:
+    get:
+      operationId: getEstimate
+      tags: [Estimate]
+      summary: Get a job's full estimate worksheet (all groups, items, and totals).
+      description: |
+        Returns every estimate group for the job, each with its line
+        items (financial fields freshly computed on every read — see
+        EstimateItem) and per-group totals, plus a job-wide totals object
+        summed across every item in every group.
+
+        Special case — a job with **zero real (persisted) groups** gets a
+        single synthetic placeholder group instead of an empty array:
+        `{id: "unassigned", jobId, name: "Unassigned", sortOrder: 0,
+        virtual: true, items: [], totals: {...all zero}}`. This group has
+        **no `createdAt` key at all** (not `null` — the key is simply
+        absent) since it was never actually written to the database. It
+        disappears automatically and permanently the moment
+        createEstimateItem or createEstimateGroup is called for that job
+        (see createEstimateItem's description) — you cannot delete it
+        directly via deleteEstimateGroup (it has no id in the database to
+        delete; calling deleteEstimateGroup with id "unassigned" will 404).
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+      responses:
+        '200':
+          description: The job's full estimate worksheet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetEstimateResponse'
+        '400':
+          $ref: '#/components/responses/MissingJobId'
+
+  /api/estimate/groups:
+    post:
+      operationId: createEstimateGroup
+      tags: [Estimate]
+      summary: Create a new named estimate group for a job.
+      description: |
+        Creates a group (a named section of the estimate worksheet, e.g.
+        "Foundation" or "Framing") for the given job. Returns the bare
+        group object only — **no `items` or `totals` keys** (those only
+        ever appear on a group as returned nested inside getEstimate's
+        response, once it has items). A freshly created group therefore
+        starts out with no items; use createEstimateItem with this
+        group's `id` as `groupId` to add line items to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateGroupInput'
+            example:
+              jobId: j1
+              name: Foundation
+      responses:
+        '201':
+          description: The created group (bare — no items/totals yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateGroup'
+        '400':
+          description: jobId and/or name are missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/estimate/groups/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EstimateGroupId'
+    delete:
+      operationId: deleteEstimateGroup
+      tags: [Estimate]
+      summary: Delete an estimate group and every line item inside it.
+      description: |
+        Permanently deletes the group identified by `id`. **This cascades
+        — every estimate item currently assigned to this group is deleted
+        along with it**, not just unassigned. There is no "move these
+        items to another group first" safety step; if you want to
+        preserve the items, reassign them (updateEstimateItem with a
+        different `groupId`) before deleting the group.
+      responses:
+        '204':
+          description: Deleted successfully (group and its items). No response body.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/estimate/items:
+    post:
+      operationId: createEstimateItem
+      tags: [Estimate]
+      summary: Create a new estimate line item for a job.
+      description: |
+        Creates a line item and returns it with server-computed financial
+        fields (builderCost, unitPrice, clientPrice, profit, margin —
+        see EstimateItemFinancials). Only `jobId` and `name` are strictly
+        enforced by the server; `costCode` is modeled as required in this
+        spec to match the real UI's save-button validation, but the
+        server currently accepts it missing (defaults to an empty
+        string) — supply it anyway to match the intended contract.
+
+        Side effect — group auto-creation ("materialization"): if
+        `groupId` is omitted (or sent as the literal string
+        `"unassigned"`), one of two things happens: (1) if the job
+        currently has **zero real groups**, the server transparently
+        creates a real "Unassigned" group and assigns this item to it —
+        you never have to call createEstimateGroup first, the first item
+        you create for a brand-new job's estimate is enough; (2) if the
+        job **already has** one or more real groups, the item is instead
+        assigned to the job's first existing group (by sort order) — it
+        does NOT create a second "Unassigned" group alongside real ones.
+        To target a specific existing group, pass its real `id` as
+        `groupId`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateItemInput'
+            example:
+              jobId: j1
+              name: Poured foundation
+              costCode: '03 Concrete'
+              quantity: 1
+              unitCost: 12000
+              markupPercent: 15
+      responses:
+        '201':
+          description: The created item, including freshly computed financial fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateItem'
+        '400':
+          description: jobId and/or name are missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/estimate/items/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EstimateItemId'
+    put:
+      operationId: updateEstimateItem
+      tags: [Estimate]
+      summary: Update an existing estimate line item.
+      description: |
+        Updates the item identified by `id`. Like updateScheduleItem,
+        treat this as a full replace of the item's editable fields —
+        fields you omit fall back to EstimateItemInput's defaults rather
+        than preserving their previous value. `jobId` cannot be changed
+        (ignored if sent). Financial fields in the response
+        (builderCost/unitPrice/clientPrice/profit/margin) are always
+        freshly recomputed from the saved quantity/unitCost/markupPercent
+        — you cannot set them directly.
+
+        If you send a `groupId`, the same materialization behavior as
+        createEstimateItem applies (see that operation's description).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateItemInput'
+      responses:
+        '200':
+          description: The updated item, including freshly computed financial fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteEstimateItem
+      tags: [Estimate]
+      summary: Delete an estimate line item.
+      description: Permanently deletes the estimate item identified by `id`. Does not affect its group. No response body on success.
+      responses:
+        '204':
+          description: Deleted successfully. No response body.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/estimate/items/{id}/duplicate:
+    parameters:
+      - $ref: '#/components/parameters/EstimateItemId'
+    post:
+      operationId: duplicateEstimateItem
+      tags: [Estimate]
+      summary: Duplicate an existing estimate line item.
+      description: |
+        Creates a copy of the item identified by `id`. **Takes no request
+        body** — any body sent is ignored, only the path parameter
+        matters.
+
+        Copies every field from the source item verbatim (groupId,
+        costCode, quantity, unitCost, markupPercent, taxable, etc. — the
+        duplicate lands in the exact same group) except: a new `id` is
+        generated, `name` becomes `"<original name> (Copy)"`, and
+        `createdAt`/`updatedAt` are reset to the current time.
+      responses:
+        '201':
+          description: The duplicated item, including freshly computed financial fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateItem'
+        '404':
+          description: No item exists with the given id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    JobIdQuery:
+      name: jobId
+      in: query
+      required: true
+      description: |
+        The job to scope this request to, e.g. "j1". Jobs themselves are
+        static frontend fixtures (src/data/jobs.js), not part of this
+        API — this parameter is a soft reference with no server-side
+        existence check (an unknown jobId returns an empty result, not
+        a 404).
+      schema:
+        type: string
+        example: j1
+    ScheduleItemId:
+      name: id
+      in: path
+      required: true
+      description: The schedule item's id, e.g. "s100".
+      schema:
+        type: string
+    EstimateGroupId:
+      name: id
+      in: path
+      required: true
+      description: The estimate group's id, e.g. "eg100". Never "unassigned" (the synthetic placeholder group has no real id to address).
+      schema:
+        type: string
+    EstimateItemId:
+      name: id
+      in: path
+      required: true
+      description: The estimate item's id, e.g. "ei100".
+      schema:
+        type: string
+
+  responses:
+    MissingJobId:
+      description: The required `jobId` query parameter was not provided.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: No resource exists with the given id.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Shape of every 400/404/500 response across this whole API.
+      properties:
+        error:
+          type: string
+          description: Human-readable explanation of what went wrong.
+      required: [error]
+
+    # ---------- Schedule ----------
+
+    ScheduleItem:
+      type: object
+      description: A schedule item (task or milestone) as returned by the API.
+      properties:
+        id:
+          type: string
+          description: Server-generated identifier, e.g. "s100". Read-only.
+        jobId:
+          type: string
+          description: The job this item belongs to. Set on create; cannot be changed afterward (ignored on update).
+        title:
+          type: string
+        color:
+          type: string
+          description: |
+            Display color name. Observed live in the real product's
+            "Display Color" dropdown, but capture was cut off before the
+            full list was seen — treat this enum as a confirmed subset,
+            not exhaustive. Any string is accepted server-side even if
+            outside this list.
+          enum: [Maroon, Merlot, Tuscan Red, Rose, Victoria, Brown, Coffee, Amber, Alarm Lime]
+        assignees:
+          type: string
+          description: Free-text assignee field (a single string, not a list, despite the plural name — matches the real product's single text input here).
+        start:
+          type: string
+          format: date
+          description: Start date, YYYY-MM-DD.
+        end:
+          type: string
+          format: date
+          description: End date, YYYY-MM-DD.
+        workDays:
+          type: integer
+          description: Duration in work days (or hours, if `hourly` is true — the unit isn't tracked separately, just this one number).
+        hourly:
+          type: boolean
+          description: If true, `workDays` is interpreted as hours instead of days (display-only distinction; no different date math is applied).
+        progress:
+          type: integer
+          description: Percent complete, 0-100. Not server-validated to that range.
+        reminder:
+          type: string
+          description: |
+            Observed live in the real product's "Reminder" dropdown, but
+            capture was cut off before the full list was seen — confirmed
+            subset, not exhaustive.
+          enum: ['None', '1 Hour Before', '2 Hours Before', '4 Hours Before', '8 Hours Before', '12 Hours Before', '1 Day Before', '2 Days Before']
+        complete:
+          type: boolean
+        phase:
+          type: string
+          description: |
+            Invented for this mock, NOT observed in the real product — the
+            real "Phase" dropdown has "Add"/"Edit" links implying a
+            per-job configurable list, which this prototype doesn't model.
+          enum: [Unassigned, Site Work, Foundation, Framing, MEP Rough-In, Finishes]
+        tags:
+          type: array
+          items:
+            type: string
+        showOnGantt:
+          type: boolean
+        showClient:
+          type: boolean
+          description: Whether this item is visible on the client-facing "Full schedule" view.
+        subIds:
+          type: array
+          items:
+            type: string
+          description: Ids of subs/vendors (src/data/subsVendors.js) with viewing access to this item.
+        notes:
+          type: string
+        createdBy:
+          type: string
+          description: Always a fixed server-set demo user name, regardless of request input. Read-only.
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp. Read-only.
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp, refreshed on every update. Read-only.
+      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, notes, createdBy, createdAt, updatedAt]
+
+    ScheduleItemInput:
+      type: object
+      description: |
+        Request body for createScheduleItem and updateScheduleItem.
+        Same fields as ScheduleItem minus the four server-assigned,
+        read-only fields (id, createdBy, createdAt, updatedAt).
+      properties:
+        jobId:
+          type: string
+          description: 'On update: accepted but ignored — an item cannot change jobs.'
+        title:
+          type: string
+        color:
+          type: string
+          enum: [Maroon, Merlot, Tuscan Red, Rose, Victoria, Brown, Coffee, Amber, Alarm Lime]
+          default: Victoria
+        assignees:
+          type: string
+          default: ''
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+        workDays:
+          type: integer
+          default: 1
+        hourly:
+          type: boolean
+          default: false
+        progress:
+          type: integer
+          default: 0
+        reminder:
+          type: string
+          enum: ['None', '1 Hour Before', '2 Hours Before', '4 Hours Before', '8 Hours Before', '12 Hours Before', '1 Day Before', '2 Days Before']
+          default: 'None'
+        complete:
+          type: boolean
+          default: false
+        phase:
+          type: string
+          enum: [Unassigned, Site Work, Foundation, Framing, MEP Rough-In, Finishes]
+          default: Unassigned
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+        showOnGantt:
+          type: boolean
+          default: true
+        showClient:
+          type: boolean
+          default: true
+        subIds:
+          type: array
+          items:
+            type: string
+          default: []
+        notes:
+          type: string
+          default: ''
+      required: [jobId, title, start, end]
+
+    # ---------- Estimate ----------
+
+    EstimateGroup:
+      type: object
+      description: A bare estimate group, as returned by createEstimateGroup (no items/totals — see EstimateGroupWithItems for the nested-in-getEstimate shape).
+      properties:
+        id:
+          type: string
+          description: e.g. "eg100", or the literal "unassigned" for the synthetic placeholder (which is never returned by this bare schema — only by EstimateGroupWithItems).
+        jobId:
+          type: string
+        name:
+          type: string
+        sortOrder:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, jobId, name, sortOrder, createdAt]
+
+    EstimateGroupInput:
+      type: object
+      description: Request body for createEstimateGroup.
+      properties:
+        jobId:
+          type: string
+        name:
+          type: string
+      required: [jobId, name]
+
+    EstimateGroupWithItems:
+      type: object
+      description: |
+        A group as it appears nested inside getEstimate's response —
+        EstimateGroup's fields plus items and totals, and (only for the
+        synthetic placeholder group) a `virtual` flag with `createdAt`
+        entirely absent.
+      allOf:
+        - $ref: '#/components/schemas/EstimateGroup'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/EstimateItem'
+            totals:
+              $ref: '#/components/schemas/EstimateTotals'
+            virtual:
+              type: boolean
+              description: |
+                Present and `true` ONLY on the synthetic "Unassigned"
+                placeholder group returned when a job has zero real
+                groups (see getEstimate). Absent entirely — not `false`
+                — on every real, persisted group.
+          required: [items, totals]
+
+    EstimateItemBase:
+      type: object
+      description: The DB-backed fields of an estimate line item (see EstimateItemFinancials for the 5 computed-on-read fields added on top of these).
+      properties:
+        id:
+          type: string
+          description: e.g. "ei100". Read-only.
+        jobId:
+          type: string
+        groupId:
+          type: string
+          description: The group this item belongs to. See createEstimateItem's description for what happens when this is omitted.
+        name:
+          type: string
+        costCode:
+          type: string
+          description: |
+            Required by the real UI's save-button validation (modeled as
+            required here to match that intended contract), but the
+            server currently accepts a create/update request with this
+            missing — it just defaults to an empty string. Only "00
+            Preconstruction Services" was directly observed live; the
+            rest of this list is the app's seeded working set, not a
+            confirmed exhaustive real catalog.
+          enum:
+            - '00 Preconstruction Services'
+            - '01 General Conditions'
+            - '02 Site Work'
+            - '03 Concrete'
+            - '06 Wood & Plastics'
+            - '07 Thermal & Moisture Protection'
+            - '08 Doors & Windows'
+            - '09 Finishes'
+            - '10 Specialties'
+            - '11 Equipment'
+            - '12 Furnishings'
+            - '22 Plumbing'
+            - '23 HVAC'
+            - '26 Electrical'
+            - '32 Exterior Improvements'
+        description:
+          type: string
+        internalNotes:
+          type: string
+        quantity:
+          type: number
+          format: float
+        unit:
+          type: string
+          description: Free-text unit of measure, e.g. "EA", "SF", "HR".
+        unitCost:
+          type: number
+          format: float
+        costType:
+          type: string
+          description: Only "None" was directly observed live; the other values are plausible but invented.
+          enum: [None, Labor, Material, Sub, Equipment, Other]
+        markupPercent:
+          type: number
+          format: float
+          description: Percentage points, e.g. 25 means 25%, not 0.25.
+        taxable:
+          type: boolean
+        sortOrder:
+          type: integer
+        createdBy:
+          type: string
+          description: Always a fixed server-set demo user name. Read-only.
+        createdAt:
+          type: string
+          format: date-time
+          description: Read-only.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Read-only.
+      required: [id, jobId, groupId, name, costCode, description, internalNotes, quantity, unit, unitCost, costType, markupPercent, taxable, sortOrder, createdBy, createdAt, updatedAt]
+
+    EstimateItemFinancials:
+      type: object
+      description: |
+        Fields computed fresh on every read from quantity/unitCost/
+        markupPercent — never stored, never settable directly. Sending
+        these in a request body is harmless (silently ignored) but has
+        no effect.
+      properties:
+        builderCost:
+          type: number
+          description: quantity × unitCost, rounded to 2 decimal places.
+        unitPrice:
+          type: number
+          description: unitCost × (1 + markupPercent / 100), rounded to 4 decimal places.
+        clientPrice:
+          type: number
+          description: quantity × unitPrice, rounded to 2 decimal places.
+        profit:
+          type: number
+          description: clientPrice − builderCost, rounded to 2 decimal places.
+        margin:
+          type: number
+          description: profit / clientPrice (0 if clientPrice is 0). A raw ratio, e.g. 0.2 for 20% — NOT already multiplied by 100.
+      required: [builderCost, unitPrice, clientPrice, profit, margin]
+
+    EstimateItem:
+      description: An estimate line item as returned by the API — DB-backed fields plus computed financials.
+      allOf:
+        - $ref: '#/components/schemas/EstimateItemBase'
+        - $ref: '#/components/schemas/EstimateItemFinancials'
+
+    EstimateItemInput:
+      type: object
+      description: |
+        Request body for createEstimateItem and updateEstimateItem. Same
+        fields as EstimateItemBase minus the server-assigned, read-only
+        fields (id, createdBy, createdAt, updatedAt).
+      properties:
+        jobId:
+          type: string
+        groupId:
+          type: string
+          description: Optional. Omit (or send "unassigned") to trigger the auto-creation/fallback behavior described on createEstimateItem.
+        name:
+          type: string
+        costCode:
+          type: string
+          enum:
+            - '00 Preconstruction Services'
+            - '01 General Conditions'
+            - '02 Site Work'
+            - '03 Concrete'
+            - '06 Wood & Plastics'
+            - '07 Thermal & Moisture Protection'
+            - '08 Doors & Windows'
+            - '09 Finishes'
+            - '10 Specialties'
+            - '11 Equipment'
+            - '12 Furnishings'
+            - '22 Plumbing'
+            - '23 HVAC'
+            - '26 Electrical'
+            - '32 Exterior Improvements'
+          description: Modeled as required to match the real UI's save validation — see EstimateItemBase.costCode for the spec-vs-server gap.
+        description:
+          type: string
+          default: ''
+        internalNotes:
+          type: string
+          default: ''
+        quantity:
+          type: number
+          format: float
+          default: 1
+        unit:
+          type: string
+          default: ''
+        unitCost:
+          type: number
+          format: float
+          default: 0
+        costType:
+          type: string
+          enum: [None, Labor, Material, Sub, Equipment, Other]
+          default: None
+        markupPercent:
+          type: number
+          format: float
+          default: 0
+        taxable:
+          type: boolean
+          default: false
+        sortOrder:
+          type: integer
+          default: 0
+      required: [jobId, name, costCode]
+
+    EstimateTotals:
+      type: object
+      description: |
+        Aggregate totals — appears both per-group and job-wide (in
+        getEstimate's top-level `totals`). Note there is NO `unitPrice`
+        key here (that only exists per-item, on EstimateItem) —
+        `tax` is always literally the number 0 (no tax-rate modeling
+        exists in this API at all), and `totalPrice` always exactly
+        equals `clientPrice` (kept as a separate key only because the
+        real UI shows both labels, not because there's an independent
+        calculation).
+      properties:
+        builderCost:
+          type: number
+        clientPrice:
+          type: number
+        profit:
+          type: number
+        margin:
+          type: number
+          description: Raw ratio, e.g. 0.2 for 20%.
+        tax:
+          type: number
+          description: Always exactly 0.
+        totalPrice:
+          type: number
+          description: Always exactly equal to clientPrice.
+      required: [builderCost, clientPrice, profit, margin, tax, totalPrice]
+
+    GetEstimateResponse:
+      type: object
+      description: The full response shape of getEstimate.
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/EstimateGroupWithItems'
+        totals:
+          $ref: '#/components/schemas/EstimateTotals'
+      required: [groups, totals]
