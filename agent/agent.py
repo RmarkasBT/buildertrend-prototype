@@ -1,17 +1,22 @@
-"""ADK agent definition - one job assistant with read/write tools over Schedule and Estimate."""
+"""ADK agent definition - one job assistant with read/write tools over Schedule,
+Estimate and Daily Logs."""
 
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.genai import types
 
-from .openapi_toolset import build_schedule_estimate_toolset
+from .openapi_toolset import (
+    build_daily_logs_toolset,
+    build_estimate_toolset,
+    build_schedule_toolset,
+)
 from .settings import get_settings
 from .tools import CUSTOM_TOOLS
 
 SYSTEM_INSTRUCTION = (
     "You are an expert construction project-management scheduler for this "
     "Buildertrend job, in addition to having tools to read and modify its "
-    "Schedule and Estimate.\n\n"
+    "Schedule, Estimate and Daily Logs.\n\n"
 
     "JOB ID: every user message starts with '[Current job_id: ...]'. Use "
     "exactly that job_id for every tool call in your reply - never guess, "
@@ -72,8 +77,9 @@ SYSTEM_INSTRUCTION = (
     "Don't parallelize trades that need the same space or an unfinished "
     "predecessor.\n\n"
 
-    "DURATION: neither the schedule nor the estimate stores durations or "
-    "dependencies directly, so infer them - from the estimate's "
+    "DURATION: a schedule item carries workDays and predecessorIds, so "
+    "durations and dependencies ARE stored - read them before inferring "
+    "anything. Where they're absent, infer from the estimate's "
     "quantities and cost codes as a sense of scope/scale, and from "
     "typical durations for that kind of work at that scale. State your "
     "assumptions plainly (e.g. \"assuming a ~2,500 sqft remodel, "
@@ -83,9 +89,12 @@ SYSTEM_INSTRUCTION = (
 
     "Otherwise: only answer from tool data, say so plainly when "
     "something is out of scope, and when you create, change, or delete "
-    "something, state exactly what you did. The update tools are a full "
-    "replace, not a patch - each tool's own description explains this and "
-    "how to preserve fields you aren't changing; follow it."
+    "something, state exactly what you did. The update tools are a "
+    "partial update, not a full replace: send only the fields you are "
+    "changing and everything else keeps its stored value. To clear a "
+    "field, send it explicitly (\"\", [], false). Writes are also "
+    "validated and will reject with a message explaining what was wrong "
+    "- read it and correct the call rather than retrying unchanged."
 )
 
 
@@ -114,7 +123,16 @@ def create_agent(settings=None) -> LlmAgent:
         name="job_assistant",
         model=model,
         instruction=SYSTEM_INSTRUCTION,
-        tools=[build_schedule_estimate_toolset(), *CUSTOM_TOOLS],
+        # Three tag-derived toolsets rather than one undifferentiated one.
+        # Same 23 tools today, but the seam is what makes scoping them per
+        # screen or per sub-agent a one-line change once the tool budget
+        # (~6.6k tokens on every request) starts to bite.
+        tools=[
+            build_schedule_toolset(),
+            build_estimate_toolset(),
+            build_daily_logs_toolset(),
+            *CUSTOM_TOOLS,
+        ],
         # Without this, ADK/LiteLLM falls back to a small default max_tokens.
         # At effort=high (extended thinking), the model can burn that whole
         # budget on thinking and stop before emitting any answer text at all

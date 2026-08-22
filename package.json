@@ -11,9 +11,12 @@
     "seed": "node --experimental-sqlite server/seed.js",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "mcp": "node server/mcp.js",
+    "lint:openapi": "./.venv/bin/python scripts/check_openapi_drift.py"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",

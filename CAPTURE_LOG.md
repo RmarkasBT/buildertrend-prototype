@@ -465,3 +465,213 @@ and Specs, Client Updates, Submittals, and Reports are all real nav items
 schedule, daily logs; Financial: budget, invoices, purchase orders). They
 render as a generic "Not built yet" placeholder (`src/pages/OutOfScope.jsx`)
 rather than fabricated screens.
+
+## Daily Logs made fully functional (list, detail, add/edit, filter, settings)
+
+The Daily Logs screen had been a static stub: a hardcoded `dailyLogsByJob`
+fixture, no routes past the list, and no backend. This pass re-captured the
+live feature and rebuilt it against a real API.
+
+Captured directly from the live session (`buildertrend.net`, job COTA 805,
+which unlike Haggans Lane had a log to observe):
+
+- **List card** — job name with a blue unread dot, the date link titled
+  `"Wed, Aug 19 | Wednesday, August 19"` (short form, pipe, long form),
+  info/print/edit icons at top right, an author chip (avatar initials +
+  name) beside a `👥 Internal` audience chip, a `View all (N)` button above
+  the photo row, a likes/comments row with the weather reading
+  (`102°F↑ 76°F↓`) right-aligned, then the Notes body. Footer reads
+  `1-1 of 1 items`.
+- **Detail view** (`/app/DailyLogView/{logId}/{jobId}/none`) — breadcrumb
+  `COTA 805 / Daily Logs`, the long-form date as the page heading, audience
+  chip, photo grid, like count, a two-column Notes block, and a right rail
+  carrying a Weather card (icon, high/low, `Wind:`, `Humidity:`,
+  `Total precipitation:`) and a `Tasks` section with an `+ Add` button.
+- **Add form** (`/app/DailyLogAdd/{jobId}`) — a full page, not a modal.
+  Title input (`Add Daily Log title`, "Maximum 50 characters") with a
+  `Draft` chip beneath; a two-column body with Job / Date* / Tags on the
+  left and Attachments (`Add`, `Create new doc`) / Notes on the right;
+  Notes shows "Maximum 4000 characters (N remaining)" and opens pre-filled
+  with the `Progress:` / `Issues:` / `Materials Delivered:` template.
+  Below: `Permissions > Share` with Internal Users / Subs-Vendors / Client /
+  Private checkboxes (Internal ticked by default but *not* locked here),
+  `Notify users`, and `Weather` with `Include Weather Conditions` (showing
+  the conditions summary, timestamp, high/low, wind, humidity, total
+  precip) and `Include Weather Notes`. Header carries Cancel and Publish.
+- **Filter drawer** — right-hand panel: a `Standard Filter` select with an
+  overflow menu, `Shared with` (All), `Keywords` with an info icon,
+  `Created by`, `Date` (All dates), `Tags`, and a `Clear all` /
+  `Apply filter` footer. The funnel icon carries a count badge.
+- **Settings modal** (`/app/DailyLogs/DailyLogSettings`) — `Daily Log Setup`
+  (Stamp Location + Default Daily Log Notes), `Weather` (two "(Default)"
+  toggles), `Default Daily Log Share Settings` as a Share/Notify grid over
+  Internal Users / Subs-Vendors / Client — Internal's Share box is checked
+  **and disabled** here, unlike on the add form — and a
+  `Daily Logs custom fields` section with a "No custom fields" empty state.
+
+Invented for this build (no live equivalent observed, or not reproducible
+locally):
+
+- **Photos.** No real job-site images exist in this repo. A photo carries a
+  `tone` and renders as a deterministic tinted tile with a hover caption.
+  The behaviour around it — the fixed-size thumbnail row, the `+N` overflow
+  tile, `View all (N)`, and a lightbox with arrow-key paging — follows what
+  was observed. Note the overflow badge counts the thumbnail it covers, so
+  8 photos in 5 slots reads `+4`, not `+3`.
+- **Weather** (`server/weather.js`). The live form calls a real weather
+  provider. Rather than take a network dependency, this derives a reading
+  deterministically from `(jobId, date)` with an FNV-1a hash, a seeded LCG,
+  and a Central-Texas seasonal temperature curve (all seeded jobs are
+  Austin-area, so August logs read ~100°F as the live COTA log did).
+  Same pair always yields the same reading, so a log's card, detail view
+  and print output can never disagree, and seeded fixtures stay stable
+  across re-seeds. Weather is snapshotted onto a log at write time, not
+  looked up on read — matching the live detail view, which keeps showing a
+  log's own day's conditions months later.
+- **Tag chips in the filter drawer.** The live drawer has a plain text
+  input; this offers the job's existing tags as toggleable chips
+  (`GET /api/daily-logs/tags`), so a filter can only ever be built from
+  tags that actually match something.
+- **Comment thread.** The live card shows a comment count; the thread
+  behind it wasn't opened. Modelled as a simple author/body/timestamp list
+  with add and delete.
+- **Notify users / Attachments / Tasks / custom fields** are recorded or
+  rendered but inert — this mock sends no notifications and stores no files.
+
+## Backend note: Daily Logs API and the weather MCP server
+
+`daily_logs`, `daily_log_comments` and a single-row `daily_log_settings`
+table were added to the existing SQLite DB (`server/db.js`), with routes in
+`server/dailyLogRoutes.js` covering list-with-filters, CRUD, a like toggle,
+comments, tag discovery, a weather preview, and settings. All twelve
+operations are documented in `openapi/schedule-estimate.yaml`, so the ADK
+agent picks them up as tools alongside the Schedule and Estimate ones.
+
+Two behaviours are worth calling out because they are easy to get wrong:
+
+- `updateDailyLog` is a full replace but deliberately refuses two fields.
+  `jobId` can't change (a log doesn't move between jobs), and `likes` is
+  owned solely by the like toggle — otherwise editing a typo in Notes would
+  wipe out other people's likes.
+- Weather is only re-snapshotted when the log's date changed or when
+  weather was just switched on. An unrelated edit leaves the recorded
+  conditions alone.
+
+The weather service is additionally exposed over MCP (`server/mcp.js`,
+registered in `.mcp.json`, or `npm run mcp`) so agents outside this app can
+call it directly instead of re-deriving it: `list_jobs`,
+`get_jobsite_weather` and `get_jobsite_weather_range`. It reads nothing
+from the database and holds no state — weather is a pure function of
+`(jobId, date)`, which is what makes it safe to expose as a tool.
+
+## Backend note: making the API safe for the agent's tool-calling
+
+The OpenAPI spec is not documentation here — it *is* the ADK agent's tool
+contract (`agent/openapi_toolset.py`), so drift between it and the server is a
+functional bug rather than a tidiness problem. Two facts about the installed
+google-adk (2.7.1), both read out of its source, decide what matters:
+
+- `RestApiTool._get_declaration` builds the `FunctionDeclaration` from `name`,
+  `description` and the **request** schema only. `_process_return_value` parses
+  the response schema but it never reaches the declaration, so **response
+  schemas are invisible to the model.** Prose descriptions, argument names,
+  `required`, `enum` and `default` are the entire agent-safety surface;
+  `responses:` blocks are hygiene for humans and Redocly.
+- `OpenApiSpecParser.resolve_ref` raises `ValueError: External references not
+  supported` for any `$ref` not starting with `#`. Since `root_agent` is built
+  at module import, that is a uvicorn startup crash. **The spec has to stay one
+  self-contained file** unless a bundling step is added — which is the answer to
+  "one YAML or several": one document, several tag-derived toolsets.
+
+### The bug that motivated all of it
+
+`PUT` was a full replace whose omitted fields fell back to the *column
+defaults*, not to the stored row. Reproduced directly: a title-only
+`PUT /api/schedule/s2` wiped `predecessorIds`, `subIds` **and** `tags`. The
+agent's tool had no `predecessor_ids` argument at all (the field was returned
+and written by the server but appeared nowhere in the spec), so it could not
+have round-tripped it even in principle — every agent-driven edit destroyed the
+item's Gantt dependency links. The daily-log equivalent reset `photos`/`tags`
+and, because `status` defaults to `published`, silently promoted drafts.
+
+Fixed by merging over the stored row in all three update paths
+(`server/routes.js`, `server/estimateRoutes.js`, `server/dailyLogRoutes.js`) —
+partial update, with an explicit `""`/`[]`/`false` needed to clear a field. This
+also makes the old NOT NULL 500s structurally impossible, so no request-body
+guards were added for them. The spec's three update descriptions and
+`agent/agent.py`'s system prompt were flipped in the same pass; leaving either
+saying "full replace" would have had the prompt contradict every tool.
+
+### Also changed
+
+- **`jobId` is validated** (`server/jobs.js`, shared with `server/mcp.js`, which
+  already checked while the HTTP path did not). It mattered most on
+  `getDailyLogWeather`: `weatherFor` hashes any string, so a typo returned a
+  confident, entirely invented forecast that an agent would report as fact. A
+  bad `jobId` on create was arguably worse — a 201 for a row no screen shows.
+  The error names the valid ids, because ADK feeds the response body back to the
+  model with a retry instruction, so that text is the self-correction channel.
+- **Malformed JSON is a 400**, not a 500: `readBody` rejects with a tagged
+  `statusCode` and the catch-all honours it. "internal server error" now means
+  what it says.
+- **`costCode` no longer forced.** It was `required` with a closed 15-value enum
+  and no empty member, so the agent had no legal way to say "I don't know" and
+  would guess — and a wrong cost code misfiles job costs, which is worse than a
+  blank one the server already defaults to.
+- **`attachments`** is documented read-only on the response and deliberately
+  kept out of `DailyLogInput`: nothing in `src/` reads it, so an input argument
+  would just invite invented file references. `predecessorIds` got the opposite
+  treatment for the opposite reason — it has real UI semantics.
+- `EstimateGroupWithItems` no longer inherits `EstimateGroup`'s `required`,
+  which had made `getEstimate` violate its own schema for every job with an
+  empty estimate (the synthetic "Unassigned" group has no `createdAt`).
+- `info.version` → **2.0.0**; the update-semantics and `jobId` changes are both
+  breaking for anything relying on the documented behaviour.
+
+### Drift prevention
+
+`npm run lint:openapi` (`scripts/check_openapi_drift.py`) compares the `rowTo*`
+mappers in `server/db.js` against the response schemas in both directions,
+diffs `server/index.js`'s routes against the spec's paths, and checks the
+`operationId` contract ADK depends on. It reports `predecessorIds`-class bugs
+immediately. Fields added by a decorator (`withFinancials`, `decorate`) are
+allowed explicitly, with the producer named and verified to still exist, so the
+allowance can't quietly outlive its reason. The script's docstring states what
+it cannot check — prose accuracy, whether an enum is exhaustive, and semantics
+like "update refuses jobId and likes" — so it isn't mistaken for full coverage.
+
+### Follow-up: the same bug class, reachable through explicit values
+
+Fixing omission was only half of it. The peer session working on the schedule
+write path warned that its own first two reconciliation attempts had this exact
+shape — trusting `workDays` over `end` shrank a 12-day bar to 1 day on a rename,
+and an explicit `workDays: 0` was silently coerced to 1 with a 200 — and that
+both only surfaced from curl-testing each case individually rather than reading
+the code. Doing the same on the Estimate and Daily Log paths found four more,
+all answering 200 with the wrong value stored:
+
+| Sent | Was stored | Consequence |
+| --- | --- | --- |
+| `status: "archived"` | `"published"` | silently published a draft |
+| `tags: "notalist"` | the string, not an array | `DailyLogCard`'s `tags.map()` threw and took the page down |
+| `quantity: "abc"` | the string, in a REAL column | `builderCost` came back `null` |
+| `quantity: -5` | `-5` | negative money, no complaint |
+
+`server/validate.js` now guards both write paths. It validates the **body**, not
+the merged result — deliberately, because merge semantics mean stored values
+flow through untouched, so validating the merge would reject an unrelated edit
+over pre-existing bad data. That is the trap that made restoring a fixture fail
+with a duration error nothing in the request could fix. Checking only what the
+caller actually sent rejects bad input without punishing anyone for history.
+
+Messages name the field, the received type and the value, because ADK hands a
+non-2xx body straight back to the model with a retry instruction — that string
+is the agent's only chance to correct itself. `quantity` accepts `0` (a
+placeholder line at zero is normal) but not `"12"`: a numeric string is exactly
+what a REAL column accepts happily on the way in and returns as a string on the
+way out, which is how `builderCost` started coming back null.
+
+Verified across 28 cases: every invalid input 400s, every legitimate partial
+edit still 200s, a draft survives the whole run as a draft, and both the Daily
+Log form and the Estimate line-item modal still save through the UI (the modal
+coerces with `Number(...) || 0` before submitting, so it never sends strings).

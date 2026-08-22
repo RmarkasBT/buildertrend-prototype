@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "buildertrend-weather": {
+      "command": "node",
+      "args": ["server/mcp.js"],
+      "env": {}
+    }
+  }
+}

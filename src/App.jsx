@@ -4,6 +4,8 @@ import Shell from './shell/Shell'
 import Dashboard from './pages/Dashboard'
 import Schedule from './pages/Schedule'
 import DailyLogs from './pages/DailyLogs'
+import DailyLogForm from './pages/DailyLogForm'
+import DailyLogDetail from './pages/DailyLogDetail'
 import JobCostingBudget from './pages/JobCostingBudget'
 import Invoices from './pages/Invoices'
 import PurchaseOrders from './pages/PurchaseOrders'
@@ -58,6 +60,12 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="schedule" element={<Schedule />} />
             <Route path="daily-logs" element={<DailyLogs />} />
+            {/* Add/edit is its own page, not a modal — the live app navigates
+                to /app/DailyLogAdd and /app/DailyLogView rather than opening a
+                dialog over the list. */}
+            <Route path="daily-logs/new" element={<DailyLogForm />} />
+            <Route path="daily-logs/:id" element={<DailyLogDetail />} />
+            <Route path="daily-logs/:id/edit" element={<DailyLogForm />} />
             <Route path="job-costing-budget" element={<JobCostingBudget />} />
             <Route path="invoices" element={<Invoices />} />
             <Route path="purchase-orders" element={<PurchaseOrders />} />
