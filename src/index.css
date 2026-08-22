@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * Color/radius/font tokens below are copied verbatim from
+ * @buildertrend/components' compiled CSS (--bds-token-*), the real
+ * Blueprint design system package. Not invented.
+ */
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-navy-900: #001a43; /* --bds-token-color-brand-primary1 : top bar / sidebar */
+  --color-brand-blue: #0763fb; /* --bds-token-color-brand-secondary3 : primary buttons/links */
+  --color-brand-coral: #ef5963; /* --bds-token-color-brand-secondary1 */
+  --color-brand-amber: #ffc26f; /* --bds-token-color-brand-secondary2 */
+
+  --color-gray-0: #ffffff;
+  --color-gray-5: #f7f9fc;
+  --color-gray-10: #f1f4fa;
+  --color-gray-15: #e2e7f0;
+  --color-gray-20: #d3dbe2;
+  --color-gray-25: #c7d0d9;
+  --color-gray-30: #acb8c3;
+  --color-gray-40: #8f9ba8;
+  --color-gray-50: #7b8493;
+  --color-gray-60: #666d7c;
+  --color-gray-70: #4e555f;
+  --color-gray-80: #383c45;
+  --color-gray-90: #202227;
+  --color-gray-100: #0e0f10;
+
+  --color-success-bg: #ddfdef;
+  --color-success-fg: #057e4b;
+  --color-danger-bg: #ffeeea;
+  --color-danger-fg: #b5254c;
+  --color-warning-bg: #fdf3d3;
+  --color-warning-fg: #854d00;
+  --color-info-bg: #e6f6ff;
+  --color-info-fg: #004fd6;
+
+  --color-border-default: #d3dbe2;
+  --color-bg-default: #f1f4fa;
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+}
+
+body {
+  margin: 0;
+  background: var(--color-gray-5);
+  color: var(--color-gray-90);
+}
+
+#root {
+  min-height: 100vh;
+}

@@ -1,0 +1,41 @@
+// Shape matches the real Daily Log card: author, crew tag, photo count, likes/
+// comments, weather high/low, and Notes/Issues/Materials Delivered sections.
+export const dailyLogsByJob = {
+  j1: [],
+  j3: [
+    {
+      id: 'dl1',
+      date: '2026-08-19',
+      dayLabel: 'Wed, Aug 19 | Wednesday, August 19',
+      author: 'Ellie Marsh',
+      crew: 'Internal',
+      photoCount: 8,
+      likes: 1,
+      comments: 2,
+      weatherHigh: 98,
+      weatherLow: 74,
+      notes: 'Foundation cured, forms stripped. Crew moving to framing layout tomorrow.',
+      issues: '',
+      materialsDelivered: 'Lumber package (2x6, 2x10) — Round Rock Lumber Co.',
+    },
+    {
+      id: 'dl2',
+      date: '2026-08-18',
+      dayLabel: 'Tue, Aug 18 | Tuesday, August 18',
+      author: 'Ellie Marsh',
+      crew: 'Internal',
+      photoCount: 3,
+      likes: 0,
+      comments: 0,
+      weatherHigh: 101,
+      weatherLow: 76,
+      notes: 'Foundation pour complete, inspector signed off.',
+      issues: 'Ready-mix delivery ran 40 minutes late.',
+      materialsDelivered: '',
+    },
+  ],
+  j2: [],
+  j4: [],
+  j5: [],
+  j6: [],
+}
