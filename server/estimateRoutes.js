@@ -144,10 +144,15 @@ export function updateItem(id, body) {
   const existing = selectItemById.get(id)
   if (!existing) return null
   const groupId = body.groupId ? materializeGroup(existing.job_id, body.groupId) : existing.group_id
+  // Partial update — merge over the stored row so omitted fields keep their
+  // value instead of falling back to estimateItemToRow's defaults. (groupId
+  // above was already preserve-on-omit; this makes the rest consistent, and
+  // stops a missing `name` binding undefined to a NOT NULL column.)
+  const merged = { ...rowToEstimateItem(existing), ...body, jobId: existing.job_id, groupId }
   // node:sqlite's DatabaseSync throws on named params a prepared statement
   // doesn't declare (unlike better-sqlite3, which ignores extras) — strip
   // job_id since updateItemStmt's UPDATE never touches it.
-  const { job_id: _job_id, ...rest } = estimateItemToRow({ ...body, jobId: existing.job_id, groupId })
+  const { job_id: _job_id, ...rest } = estimateItemToRow(merged)
   const row = { id, ...rest, updated_at: new Date().toISOString() }
   updateItemStmt.run(row)
   return withFinancials(rowToEstimateItem(selectItemById.get(id)))

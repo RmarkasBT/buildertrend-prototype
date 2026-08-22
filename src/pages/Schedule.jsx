@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react'
 import { useJob } from '../context/JobContext'
 import { useSchedule } from '../hooks/useSchedule'
 import { colorHex } from '../data/scheduleColors'
+import { addDays, toISODate } from '../lib/dates'
 import ScheduleItemModal from '../components/ScheduleItemModal'
 import AssistantPanel from '../components/AssistantPanel'
+import GanttChart from '../components/GanttChart'
 
 // Tabs (Schedule/Baseline/Workday Exceptions), view toggle (Calendar/List/
 // Gantt), toolbar (gear/undo/Schedule Offline/More Actions/Filter/New
@@ -32,10 +34,6 @@ function buildMonthGrid(year, month) {
   return weeks
 }
 
-function toISODate(d) {
-  return d.toISOString().slice(0, 10)
-}
-
 export default function Schedule() {
   const { currentJob } = useJob()
   const { items, loading, error, save, remove, copy, refresh } = useSchedule(currentJob?.id)
@@ -56,7 +54,14 @@ export default function Schedule() {
     return items.filter((it) => it.start <= iso && iso <= it.end)
   }
 
-  const openCreate = () => { setEditingItem(null); setModalOpen(true) }
+  const openCreate = (afterItem) => {
+    setEditingItem(
+      afterItem
+        ? { phase: afterItem.phase, start: addDays(afterItem.end, 1), end: addDays(afterItem.end, 1) }
+        : null,
+    )
+    setModalOpen(true)
+  }
   const openEdit = (it) => { setEditingItem(it); setModalOpen(true) }
   const closeModal = () => { setModalOpen(false); setEditingItem(null) }
 
@@ -179,61 +184,94 @@ export default function Schedule() {
           )}
 
           {!loading && !error && view === 'List' && (
-            <table className="mt-3 w-full rounded-md border border-gray-15 bg-white text-sm">
-              <thead className="bg-gray-5 text-left text-xs font-semibold text-gray-60">
-                <tr>
-                  <th className="px-3 py-2">Title</th>
-                  <th className="px-3 py-2">Start</th>
-                  <th className="px-3 py-2">End</th>
-                  <th className="px-3 py-2">Progress</th>
-                  <th className="px-3 py-2">Complete</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.length === 0 ? (
-                  <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-50">No schedule items yet.</td></tr>
-                ) : items.map((it) => (
-                  <tr key={it.id} className="cursor-pointer border-t border-gray-15 hover:bg-gray-5" onClick={() => openEdit(it)}>
-                    <td className="px-3 py-2">
-                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: colorHex(it.color) }} />
-                      {it.title}
-                    </td>
-                    <td className="px-3 py-2">{it.start}</td>
-                    <td className="px-3 py-2">{it.end}</td>
-                    <td className="px-3 py-2">{it.progress}%</td>
-                    <td className="px-3 py-2">{it.complete ? 'Yes' : ''}</td>
+            <div className="mt-3 overflow-x-auto rounded-md border border-gray-15 bg-white">
+              <table className="w-full min-w-[1100px] text-sm">
+                <thead className="border-b border-gray-15 bg-gray-5 text-left text-xs font-semibold text-gray-60">
+                  <tr>
+                    <th className="w-8 px-3 py-2"><input type="checkbox" /></th>
+                    <th className="px-3 py-2">ID #</th>
+                    <th className="px-3 py-2">Title</th>
+                    <th className="px-3 py-2">Complete</th>
+                    <th className="px-3 py-2">Phase</th>
+                    <th className="px-3 py-2">Duration</th>
+                    <th className="px-3 py-2">Start</th>
+                    <th className="px-3 py-2">End</th>
+                    <th className="px-3 py-2">Assigned To</th>
+                    <th className="px-3 py-2">Accepted</th>
+                    <th className="px-3 py-2">Pending</th>
+                    <th className="px-3 py-2">Declined</th>
+                    <th className="px-3 py-2">Files</th>
+                    <th className="px-3 py-2">Comments</th>
+                    <th className="px-3 py-2">RFIs</th>
+                    <th className="px-3 py-2">Show Client</th>
+                    <th className="px-3 py-2">Predecessors</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.length === 0 ? (
+                    <tr><td colSpan={17} className="px-3 py-6 text-center text-gray-50">No schedule items yet.</td></tr>
+                  ) : items.map((it, i) => {
+                    const preds = (it.predecessorIds || []).map((pid) => items.find((x) => x.id === pid)?.title).filter(Boolean)
+                    return (
+                      <tr key={it.id} className="border-t border-gray-15 hover:bg-gray-5">
+                        <td className="px-3 py-2"><input type="checkbox" /></td>
+                        <td className="px-3 py-2 text-gray-50">{i + 1}</td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => openEdit(it)} className="flex items-center gap-2 text-left text-brand-blue hover:underline">
+                            <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: colorHex(it.color) }} />
+                            <span className="truncate">{it.title}</span>
+                          </button>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-1.5">
+                            <div
+                              className="h-4 w-4 rounded-full"
+                              style={{ background: `conic-gradient(var(--color-brand-blue) ${it.progress * 3.6}deg, var(--color-gray-15) 0deg)` }}
+                            />
+                            {it.progress}%
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-gray-60">{it.phase === 'Unassigned' ? '--' : it.phase}</td>
+                        <td className="px-3 py-2 text-gray-60">{it.workDays} day{it.workDays === 1 ? '' : 's'}</td>
+                        <td className="px-3 py-2">{it.start}</td>
+                        <td className="px-3 py-2">{it.end}</td>
+                        <td className="px-3 py-2 text-gray-60">{it.assignees || '--'}</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2 text-brand-blue">0</td>
+                        <td className="px-3 py-2">
+                          <button
+                            onClick={() => save({ ...it, showClient: !it.showClient })}
+                            title={it.showClient ? 'Visible to client' : 'Hidden from client'}
+                            className={it.showClient ? 'text-gray-70' : 'text-gray-25'}
+                          >
+                            {it.showClient ? '👁' : '—'}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-gray-60">{preds.length ? preds.join(', ') : '--'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              <div className="flex items-center justify-between border-t border-gray-15 px-3 py-2 text-xs text-gray-50">
+                <select className="rounded-sm border border-gray-20 px-2 py-1" defaultValue="Standard View">
+                  <option>Standard View</option>
+                </select>
+                <span>1-{items.length} of {items.length} items</span>
+              </div>
+            </div>
           )}
 
           {!loading && !error && view === 'Gantt' && (
-            <div className="mt-3 rounded-md border border-gray-15 bg-white p-3">
+            <div className="mt-3">
               {items.length === 0 ? (
-                <div className="py-6 text-center text-sm text-gray-50">No schedule items yet.</div>
+                <div className="rounded-md border border-gray-15 bg-white py-6 text-center text-sm text-gray-50">No schedule items yet.</div>
               ) : (
-                <div className="space-y-2">
-                  {items.map((it) => {
-                    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
-                    const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate()
-                    const s = Math.max(0, (new Date(it.start) - monthStart) / 86400000)
-                    const e = Math.min(daysInMonth, (new Date(it.end) - monthStart) / 86400000 + 1)
-                    const left = (s / daysInMonth) * 100
-                    const width = Math.max(((e - s) / daysInMonth) * 100, 2)
-                    return (
-                      <button key={it.id} onClick={() => openEdit(it)} className="flex w-full items-center gap-2 text-left">
-                        <div className="w-56 truncate text-xs text-gray-70">{it.title}</div>
-                        <div className="relative h-4 flex-1 rounded-sm bg-gray-10">
-                          <div
-                            className="absolute h-4 rounded-sm"
-                            style={{ left: `${left}%`, width: `${width}%`, backgroundColor: colorHex(it.color) }}
-                          />
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
+                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} />
               )}
             </div>
           )}
@@ -244,6 +282,7 @@ export default function Schedule() {
         <ScheduleItemModal
           item={editingItem}
           jobSubIds={currentJob.subIds}
+          allItems={items}
           onSave={handleSave}
           onDelete={handleDelete}
           onCopy={handleCopy}

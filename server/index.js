@@ -2,8 +2,20 @@ import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { listItems, createItem, updateItem, deleteItem } from './routes.js'
+import {
+  listItems,
+  createItem,
+  updateItem,
+  deleteItem,
+  validateItem,
+  validateBody,
+  mergedItem,
+  preparedNewItem,
+} from './routes.js'
 import * as estimates from './estimateRoutes.js'
+import * as dailyLogs from './dailyLogRoutes.js'
+import { jobIdError } from './jobs.js'
+import { validateDailyLogBody, validateEstimateItemBody } from './validate.js'
 import { ensureSeeded } from './seed.js'
 
 // Port must match vite.config.js's server.proxy target.
@@ -25,8 +37,11 @@ function readBody(req) {
       if (!data) return resolve({})
       try {
         resolve(JSON.parse(data))
-      } catch (err) {
-        reject(err)
+      } catch {
+        // Tagged so the catch-all below answers 400 instead of 500. A
+        // malformed body is the caller's mistake, and "internal server error"
+        // tells an agent nothing it can act on — it just burns its retries.
+        reject(Object.assign(new Error('request body is not valid JSON'), { statusCode: 400 }))
       }
     })
     req.on('error', reject)
@@ -37,10 +52,17 @@ const ID_ROUTE = /^\/api\/schedule\/([^/]+)$/
 const ESTIMATE_GROUP_ROUTE = /^\/api\/estimate\/groups\/([^/]+)$/
 const ESTIMATE_ITEM_ROUTE = /^\/api\/estimate\/items\/([^/]+)$/
 const ESTIMATE_ITEM_DUPLICATE_ROUTE = /^\/api\/estimate\/items\/([^/]+)\/duplicate$/
+const DAILY_LOG_ID_ROUTE = /^\/api\/daily-logs\/([^/]+)$/
+const DAILY_LOG_LIKE_ROUTE = /^\/api\/daily-logs\/([^/]+)\/like$/
+const DAILY_LOG_COMMENTS_ROUTE = /^\/api\/daily-logs\/([^/]+)\/comments$/
+const DAILY_LOG_COMMENT_ROUTE = /^\/api\/daily-logs\/comments\/([^/]+)$/
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const { pathname, searchParams } = url
+  // Opt-in request log — `LOG_REQUESTS=1 npm run dev:server`. Off by
+  // default so normal runs don't bury the startup line in noise.
+  if (process.env.LOG_REQUESTS) console.log(`${req.method} ${req.url}`)
 
   try {
     // Served fresh from disk on every request (not cached at startup) so
@@ -55,7 +77,8 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/schedule' && req.method === 'GET') {
       const jobId = searchParams.get('jobId')
-      if (!jobId) return send(res, 400, { error: 'jobId query param is required' })
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
       return send(res, 200, listItems(jobId))
     }
 
@@ -64,15 +87,32 @@ const server = createServer(async (req, res) => {
       // start_date/end_date are NOT NULL columns (server/db.js) — validate
       // here so a missing value 400s cleanly instead of throwing past this
       // check into the generic 500 handler below.
-      if (!body.jobId || !body.title || !body.start || !body.end) {
-        return send(res, 400, { error: 'jobId, title, start, and end are required' })
+      if (!body.title || !body.start) {
+        return send(res, 400, { error: 'title and start are required' })
       }
+      // A typo'd jobId used to 201 for a row no screen could ever render, so
+      // an agent would report success for work that had effectively vanished.
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      const badField = validateBody(body)
+      if (badField) return send(res, 400, { error: badField })
+      const invalid = validateItem(preparedNewItem(body), body.jobId, null)
+      if (invalid) return send(res, 400, { error: invalid })
       return send(res, 201, createItem(body))
     }
 
     const idMatch = pathname.match(ID_ROUTE)
-    if (idMatch && req.method === 'PUT') {
+    // PATCH and PUT are the same handler: updateItem merges over the stored row
+    // either way. PATCH is the honest name for those semantics and is what the
+    // spec points agents at; PUT stays for the existing callers.
+    if (idMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
       const body = await readBody(req)
+      const badField = validateBody(body)
+      if (badField) return send(res, 400, { error: badField })
+      const merged = mergedItem(idMatch[1], body)
+      if (!merged) return send(res, 404, { error: 'not found' })
+      const invalid = validateItem(merged, merged.jobId, idMatch[1])
+      if (invalid) return send(res, 400, { error: invalid })
       const updated = updateItem(idMatch[1], body)
       if (!updated) return send(res, 404, { error: 'not found' })
       return send(res, 200, updated)
@@ -86,13 +126,16 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/estimate' && req.method === 'GET') {
       const jobId = searchParams.get('jobId')
-      if (!jobId) return send(res, 400, { error: 'jobId query param is required' })
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
       return send(res, 200, estimates.getEstimate(jobId))
     }
 
     if (pathname === '/api/estimate/groups' && req.method === 'POST') {
       const body = await readBody(req)
-      if (!body.jobId || !body.name) return send(res, 400, { error: 'jobId and name are required' })
+      if (!body.name) return send(res, 400, { error: 'name is required' })
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
       return send(res, 201, estimates.createGroup(body.jobId, body.name))
     }
 
@@ -105,7 +148,10 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/estimate/items' && req.method === 'POST') {
       const body = await readBody(req)
-      if (!body.jobId || !body.name) return send(res, 400, { error: 'jobId and name are required' })
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      const badField = validateEstimateItemBody(body, { require: ['name'] })
+      if (badField) return send(res, 400, { error: badField })
       return send(res, 201, estimates.createItem(body.jobId, body))
     }
 
@@ -117,8 +163,15 @@ const server = createServer(async (req, res) => {
     }
 
     const itemIdMatch = pathname.match(ESTIMATE_ITEM_ROUTE)
-    if (itemIdMatch && req.method === 'PUT') {
+    // PATCH alongside PUT, matching the schedule and daily-log routes:
+    // updateItem merges over the stored row either way, so both verbs are
+    // honest here and an agent can't guess the wrong one.
+    if (itemIdMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
       const body = await readBody(req)
+      // Body-level, not merged: a non-numeric quantity used to be stored
+      // verbatim and made builderCost come back null on a 200.
+      const badField = validateEstimateItemBody(body)
+      if (badField) return send(res, 400, { error: badField })
       const updated = estimates.updateItem(itemIdMatch[1], body)
       if (!updated) return send(res, 404, { error: 'not found' })
       return send(res, 200, updated)
@@ -130,8 +183,121 @@ const server = createServer(async (req, res) => {
       return send(res, 204)
     }
 
+    // --- Daily Logs ---------------------------------------------------
+    // Fixed sub-paths (/weather, /tags, /comments/:id) are matched before
+    // the generic /:id route below so an id regex can't swallow them.
+    if (pathname === '/api/daily-logs' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      return send(res, 200, dailyLogs.listLogs(jobId, {
+        sharedWith: searchParams.get('sharedWith') || undefined,
+        keywords: searchParams.get('keywords') || undefined,
+        createdBy: searchParams.get('createdBy') || undefined,
+        dateRange: searchParams.get('dateRange') || undefined,
+        startDate: searchParams.get('startDate') || undefined,
+        endDate: searchParams.get('endDate') || undefined,
+        status: searchParams.get('status') || undefined,
+        tags: searchParams.getAll('tag'),
+      }))
+    }
+
+    if (pathname === '/api/daily-logs' && req.method === 'POST') {
+      const body = await readBody(req)
+      // log_date is NOT NULL — validate here so a missing date 400s cleanly
+      // instead of falling through to the generic 500 handler.
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      const badField = validateDailyLogBody(body, { require: ['date'] })
+      if (badField) return send(res, 400, { error: badField })
+      return send(res, 201, dailyLogs.createLog(body))
+    }
+
+    if (pathname === '/api/daily-logs/weather' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const date = searchParams.get('date')
+      // The jobId check matters most on this route: weatherFor just hashes
+      // whatever string it's handed, so an unvalidated typo returns a
+      // confident, entirely invented forecast rather than an error.
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return send(res, 400, { error: `date query param must be YYYY-MM-DD (got ${JSON.stringify(date)})` })
+      }
+      return send(res, 200, dailyLogs.weatherFor(jobId, date))
+    }
+
+    if (pathname === '/api/daily-logs/tags' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      return send(res, 200, dailyLogs.listTags(jobId))
+    }
+
+    const logCommentMatch = pathname.match(DAILY_LOG_COMMENT_ROUTE)
+    if (logCommentMatch && req.method === 'DELETE') {
+      const updated = dailyLogs.deleteComment(logCommentMatch[1])
+      if (!updated) return send(res, 404, { error: 'not found' })
+      return send(res, 200, updated)
+    }
+
+    const logLikeMatch = pathname.match(DAILY_LOG_LIKE_ROUTE)
+    if (logLikeMatch && req.method === 'POST') {
+      const updated = dailyLogs.toggleLike(logLikeMatch[1])
+      if (!updated) return send(res, 404, { error: 'not found' })
+      return send(res, 200, updated)
+    }
+
+    const logCommentsMatch = pathname.match(DAILY_LOG_COMMENTS_ROUTE)
+    if (logCommentsMatch && req.method === 'POST') {
+      const body = await readBody(req)
+      if (!body.body?.trim()) return send(res, 400, { error: 'body is required' })
+      const updated = dailyLogs.addComment(logCommentsMatch[1], body.body.trim())
+      if (!updated) return send(res, 404, { error: 'not found' })
+      return send(res, 201, updated)
+    }
+
+    const logIdMatch = pathname.match(DAILY_LOG_ID_ROUTE)
+    if (logIdMatch && req.method === 'GET') {
+      const log = dailyLogs.getLog(logIdMatch[1])
+      if (!log) return send(res, 404, { error: 'not found' })
+      return send(res, 200, log)
+    }
+
+    // PATCH and PUT share the handler: updateLog merges over the stored log
+    // either way, so `date` is deliberately NOT required here — it comes from
+    // the stored row. Requiring it made every partial edit 400.
+    if (logIdMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const body = await readBody(req)
+      // Body-level, not merged: `status: "archived"` used to fall through to
+      // "published" and answer 200, silently publishing a draft, and a
+      // non-array `tags` was stored as a string that then crashed the card.
+      const badField = validateDailyLogBody(body)
+      if (badField) return send(res, 400, { error: badField })
+      const updated = dailyLogs.updateLog(logIdMatch[1], body)
+      if (!updated) return send(res, 404, { error: 'not found' })
+      return send(res, 200, updated)
+    }
+
+    if (logIdMatch && req.method === 'DELETE') {
+      if (!dailyLogs.deleteLog(logIdMatch[1])) return send(res, 404, { error: 'not found' })
+      return send(res, 204)
+    }
+
+    if (pathname === '/api/daily-log-settings' && req.method === 'GET') {
+      return send(res, 200, dailyLogs.getSettings())
+    }
+
+    if (pathname === '/api/daily-log-settings' && req.method === 'PUT') {
+      return send(res, 200, dailyLogs.updateSettings(await readBody(req)))
+    }
+
     send(res, 404, { error: 'not found' })
   } catch (err) {
+    // Errors tagged with a statusCode (see readBody) are the caller's fault
+    // and answer as themselves; anything else is a genuine bug and stays a
+    // 500. Keeps "internal server error" meaning what it says.
+    if (err?.statusCode) return send(res, err.statusCode, { error: err.message })
     console.error(err)
     send(res, 500, { error: 'internal server error' })
   }

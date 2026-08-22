@@ -1,14 +1,26 @@
 openapi: 3.0.3
 info:
-  title: Buildertrend Mock — Schedule & Estimate API
-  version: 1.0.0
+  title: Buildertrend Mock — Schedule, Estimate & Daily Logs API
+  version: 2.0.0
   description: |
-    Local-only, unauthenticated REST API backing the Schedule and Estimate
-    features of a Buildertrend front-end mock (see the repo's
+    Local-only, unauthenticated REST API backing the Schedule, Estimate and
+    Daily Logs features of a Buildertrend front-end mock (see the repo's
     CAPTURE_LOG.md for what in this app is captured from the real product
     vs. invented for demo purposes). No `security` scheme is defined
     anywhere in this document — that's intentional, not an omission; this
     server only ever runs on localhost for local development/agent use.
+
+    ERRORS: every 4xx/5xx response body is an ErrorResponse whose `error`
+    string is written to be actionable — an agent framework hands that text
+    back to the model, so it names the offending field and, for jobId, the
+    valid values. A malformed JSON body is a 400. Any 500 means a genuine
+    server bug, not a caller mistake; individual operations therefore do not
+    enumerate '500'.
+
+    UPDATES are partial: PUT (and PATCH, an undocumented alias with identical
+    behaviour) change only the fields you send and leave everything else at
+    its stored value. This changed in 2.0.0 — it used to be a full replace,
+    which silently reset omitted fields.
 
     This spec is written to be consumed by an agent framework's
     OpenAPI-to-tool machinery (e.g. Google ADK's `OpenAPIToolset`), which
@@ -28,6 +40,12 @@ tags:
     description: Per-job schedule items (tasks/milestones) — server/routes.js.
   - name: Estimate
     description: Per-job estimate worksheet (groups + line items) — server/estimateRoutes.js.
+  - name: Daily Logs
+    description: |
+      Per-job daily logs — server/dailyLogRoutes.js. A daily log is one dated
+      site report: notes, tags, photos, an audience, and a snapshot of the
+      day's weather. Weather is also exposed to non-HTTP agents as MCP tools
+      (server/mcp.js).
 
 paths:
   /api/schedule:
@@ -60,11 +78,16 @@ paths:
         Creates a schedule item under the given job and returns it with
         server-assigned `id`, `createdBy`, `createdAt`, and `updatedAt`.
 
-        Required fields: `jobId`, `title`, `start`, `end`. All other
-        fields are optional and fall back to sensible defaults (see
+        Required fields: `jobId`, `title`, `start`. All other fields are
+        optional and fall back to sensible defaults (see
         ScheduleItemInput's per-field descriptions) — this mirrors the
         real "New Schedule Item" form, where only Title/Start Date/End
         Date are marked required.
+
+        `end` is derived when omitted: `workDays` counts WORKING days
+        (Mon–Fri), so `{start: "2026-08-06", workDays: 3}` ends
+        2026-08-10, skipping the weekend. Send `end` instead and
+        `workDays` is recounted over that span.
 
         `createdBy` is always server-set to a fixed demo user regardless
         of what you send — there is no real user/auth concept in this
@@ -100,27 +123,41 @@ paths:
     put:
       operationId: updateScheduleItem
       tags: [Schedule]
-      summary: Replace an existing schedule item's fields.
+      summary: Update some of a schedule item's fields.
       description: |
-        Updates the schedule item identified by `id`. **This is a full
-        replace, not a partial patch** — every field in the request body
-        is written, and any field you omit falls back to
-        ScheduleItemInput's default (e.g. an omitted `color` resets to
-        `"Victoria"`, an omitted `progress` resets to `0`) rather than
-        keeping its previous value. If you only want to change one field,
-        first fetch the item (via listScheduleItems), then send the full
-        object back with just that one field changed.
+        Updates the schedule item identified by `id`. **This is a partial
+        update** — send only the fields you want to change and every other
+        field keeps its stored value. (It used to be a full replace whose
+        omitted fields reset to defaults, which silently wiped
+        `predecessorIds`, `subIds` and `tags` on a title-only edit.) To
+        clear a field, send it explicitly (e.g. `"notes": ""`).
 
-        `jobId` in the request body is accepted but silently ignored —
-        an item can never change which job it belongs to via this
-        endpoint; the response's `jobId` always matches the item's
-        original job.
+        `jobId` in the request body is accepted but silently ignored — an
+        item can never change which job it belongs to.
+
+        DURATION: `start`, `end` and `workDays` are three views of two
+        facts, and `workDays` counts WORKING days (Mon–Fri), so a 5-day
+        task starting Thursday ends the following Wednesday. Send whichever
+        pair you mean and the rest is derived:
+          * `workDays` alone -> `end` is recomputed from `start`
+          * `end` alone      -> `workDays` is recounted over the span
+          * `start` alone    -> the item moves and keeps its duration
+        Sending nothing date-related leaves all three untouched.
+
+        VALIDATION (all `400`, with a message naming the problem): blank
+        title; a date that isn't `YYYY-MM-DD`; `end` before `start`;
+        `workDays` not an integer >= 1; `progress` outside 0–100; a
+        `predecessorIds` entry that is unknown, duplicated, belongs to
+        another job, or is this item itself; and any edit that would create
+        a dependency cycle (the error names the loop).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ScheduleItemInput'
+            example:
+              progress: 40
       responses:
         '200':
           description: The updated schedule item.
@@ -128,8 +165,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScheduleItem'
+        '400':
+          description: A field failed validation — see the message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           $ref: '#/components/responses/NotFound'
+    # PATCH /api/schedule/{id} also works and is the same handler, but it is
+    # deliberately NOT documented as its own operation: the spec is consumed by
+    # OpenAPIToolset, so a second entry would generate a byte-identical tool and
+    # make the model choose between two indistinguishable options for no gain.
+    # Same treatment as the PATCH aliases on daily-logs and estimate-items.
     delete:
       operationId: deleteScheduleItem
       tags: [Schedule]
@@ -292,11 +340,14 @@ paths:
       tags: [Estimate]
       summary: Update an existing estimate line item.
       description: |
-        Updates the item identified by `id`. Like updateScheduleItem,
-        treat this as a full replace of the item's editable fields —
-        fields you omit fall back to EstimateItemInput's defaults rather
-        than preserving their previous value. `jobId` cannot be changed
-        (ignored if sent). Financial fields in the response
+        Partial update: only the fields you send are changed, and every
+        field you omit keeps its currently stored value. To clear a field,
+        send it explicitly (`""`, `[]`, `false`). Previously this was a full
+        replace, which meant a name-only edit silently reset quantity,
+        unitCost, markupPercent and internalNotes to their defaults.
+
+        `jobId` cannot be changed (ignored if sent). Financial fields in the
+        response
         (builderCost/unitPrice/clientPrice/profit/margin) are always
         freshly recomputed from the saved quantity/unitCost/markupPercent
         — you cannot set them directly.
@@ -360,6 +411,382 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/daily-logs:
+    get:
+      operationId: listDailyLogs
+      tags: [Daily Logs]
+      summary: List a job's daily logs, newest first.
+      description: |
+        Returns the job's daily logs ordered by log date descending, then id
+        descending. Returns an empty array (not an error) for a job with no
+        logs or an unknown jobId.
+
+        Every filter parameter is optional and they combine with AND. Each
+        returned log carries derived `likeCount`, `likedByMe` and
+        `commentCount` fields, but NOT the comment bodies — fetch a single
+        log with getDailyLog for those.
+
+        Drafts are included by default; pass `status=draft` or
+        `status=published` to narrow.
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+        - name: sharedWith
+          in: query
+          description: |
+            Filter by audience. "internal", "subs" and "client" each match logs
+            shared with that audience AND not marked private; "private" matches
+            only private logs. Omit or pass "all" for no audience filter.
+          schema:
+            type: string
+            enum: [all, internal, subs, client, private]
+        - name: keywords
+          in: query
+          description: Case-insensitive substring match against the log's title, notes and tags.
+          schema:
+            type: string
+        - name: createdBy
+          in: query
+          description: Case-insensitive substring match against the author's name.
+          schema:
+            type: string
+        - name: dateRange
+          in: query
+          description: |
+            Named relative range, resolved against the server's current date
+            (inclusive on both ends). Use startDate/endDate instead for an
+            explicit window; if both are supplied they narrow each other.
+          schema:
+            type: string
+            enum: [all, today, yesterday, last7, last30, thisMonth, future]
+        - name: startDate
+          in: query
+          description: Only logs dated on or after this day (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: Only logs dated on or before this day (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, published]
+        - name: tag
+          in: query
+          description: |
+            Exact (case-insensitive) tag match. Repeat the parameter to pass
+            several — a log matches if it carries ANY of them, not all.
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: The job's daily logs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyLog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+    post:
+      operationId: createDailyLog
+      tags: [Daily Logs]
+      summary: Create a daily log.
+      description: |
+        Creates a log and returns it, including its generated id ("dl100",
+        "dl101", ...) and its comments array (always empty on creation).
+
+        Side effect worth knowing: if `includeWeather` is true (the default),
+        the server snapshots the weather for `jobId`/`date` at write time and
+        stores it on the log. It is NOT re-derived on read, so the log keeps
+        showing the conditions for its day even after the date passes.
+
+        `jobId` and `date` are required; everything else falls back to the
+        column defaults. `title` is truncated to 50 characters and `notes` to
+        4000 — over-long values are silently trimmed rather than rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DailyLogInput'
+      responses:
+        '201':
+          description: The created log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/daily-logs/weather:
+    get:
+      operationId: getDailyLogWeather
+      tags: [Daily Logs]
+      summary: Preview the weather for a job and day.
+      description: |
+        Returns the weather reading the server would snapshot onto a log for
+        this job and date. Purely derived and side-effect free — the same
+        (jobId, date) always returns the same reading, and calling this does
+        not create or modify anything.
+
+        Used by the add/edit form to show the forecast before the log is
+        saved. The same function is exposed to MCP clients as the
+        `get_jobsite_weather` tool (server/mcp.js).
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: The weather reading.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weather'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/daily-logs/tags:
+    get:
+      operationId: listDailyLogTags
+      tags: [Daily Logs]
+      summary: List the distinct tags used on a job's daily logs.
+      description: |
+        Returns the sorted, de-duplicated set of tags across the job's logs.
+        Backs tag autocomplete and the filter drawer's tag chips — it only
+        ever returns tags that can actually match something.
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+      responses:
+        '200':
+          description: Sorted distinct tags.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/daily-logs/{id}:
+    get:
+      operationId: getDailyLog
+      tags: [Daily Logs]
+      summary: Get one daily log, including its comments.
+      description: |
+        Same shape as a list entry plus a `comments` array ordered oldest
+        first. This is the only endpoint that returns comment bodies.
+      parameters:
+        - $ref: '#/components/parameters/DailyLogId'
+      responses:
+        '200':
+          description: The daily log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      operationId: updateDailyLog
+      tags: [Daily Logs]
+      summary: Update a daily log.
+      description: |
+        Partial update: only the fields you send are changed, and every field
+        you omit keeps its currently stored value. To clear a field, send it
+        explicitly (`""`, `[]`, `false`). `date` is NOT required — omit it and
+        the log keeps the day it already had.
+
+        This used to be a full replace, which made a notes-only edit reset
+        `photos` and `tags`, and — because `status` defaulted to `published` —
+        silently promote a draft.
+
+        Two fields are deliberately NOT updatable here: `jobId` (a log cannot
+        be moved between jobs) and `likes` (owned solely by toggleDailyLogLike,
+        so an edit can't clobber other people's likes). `attachments` is
+        read-only.
+
+        Weather is re-snapshotted only when `date` changed or when weather was
+        previously absent and `includeWeather` is now true; setting
+        `includeWeather` to false clears it. An unrelated edit therefore won't
+        silently rewrite the recorded conditions.
+      parameters:
+        - $ref: '#/components/parameters/DailyLogId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DailyLogInput'
+      responses:
+        '200':
+          description: The updated log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: deleteDailyLog
+      tags: [Daily Logs]
+      summary: Delete a daily log and its comments.
+      description: |
+        Permanently deletes the log and cascades to its comments. There is no
+        soft-delete, undo or trash — this is irreversible.
+      parameters:
+        - $ref: '#/components/parameters/DailyLogId'
+      responses:
+        '204':
+          description: Deleted. No body.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/daily-logs/{id}/like:
+    post:
+      operationId: toggleDailyLogLike
+      tags: [Daily Logs]
+      summary: Toggle the current user's like on a daily log.
+      description: |
+        A toggle, not an increment: calling it once likes the log, calling it
+        again un-likes it. There is no auth layer, so "the current user" is
+        always the hard-coded "Ruhaab Markas" (dailyLogRoutes.CURRENT_USER).
+        Takes no request body. Returns the full updated log.
+      parameters:
+        - $ref: '#/components/parameters/DailyLogId'
+      responses:
+        '200':
+          description: The updated log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/daily-logs/{id}/comments:
+    post:
+      operationId: addDailyLogComment
+      tags: [Daily Logs]
+      summary: Add a comment to a daily log.
+      description: |
+        Appends a comment authored by the hard-coded current user and returns
+        the full updated log (with the new comment in `comments`), not the
+        comment on its own. Whitespace-only bodies are rejected with a 400.
+      parameters:
+        - $ref: '#/components/parameters/DailyLogId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+                  description: The comment text. Must contain non-whitespace.
+              required: [body]
+      responses:
+        '201':
+          description: The updated log, including the new comment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/daily-logs/comments/{id}:
+    delete:
+      operationId: deleteDailyLogComment
+      tags: [Daily Logs]
+      summary: Delete a single comment.
+      description: |
+        Deletes the comment and returns the full updated parent log — note
+        this returns 200 with a body, not the 204 that deleteDailyLog returns.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The comment's id, e.g. "dlc100".
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The updated parent log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/daily-log-settings:
+    get:
+      operationId: getDailyLogSettings
+      tags: [Daily Logs]
+      summary: Get the company-wide daily log settings.
+      description: |
+        A single company-wide record (there is no per-job override). These are
+        defaults applied to NEW logs at compose time by the frontend — changing
+        them never rewrites logs that already exist.
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLogSettings'
+
+    put:
+      operationId: updateDailyLogSettings
+      tags: [Daily Logs]
+      summary: Update the company-wide daily log settings.
+      description: |
+        Shallow-merges the body over the current settings, and merges `share`
+        and `notify` one level deeper — so `{"share": {"client": true}}` leaves
+        `share.subs` alone. Returns the full merged settings.
+
+        `share.internal` is forced to true and cannot be cleared: every log is
+        at minimum visible internally.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DailyLogSettings'
+      responses:
+        '200':
+          description: The updated settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyLogSettings'
+
+
 components:
   parameters:
     JobIdQuery:
@@ -386,7 +813,10 @@ components:
       name: id
       in: path
       required: true
-      description: The estimate group's id, e.g. "eg100". Never "unassigned" (the synthetic placeholder group has no real id to address).
+      description: |
+        The estimate group's id, e.g. "eg100". `unassigned` is the synthetic
+        placeholder group's id — it has no database row, so passing it here
+        404s (getEstimate does return it, which is why it looks addressable).
       schema:
         type: string
     EstimateItemId:
@@ -394,6 +824,13 @@ components:
       in: path
       required: true
       description: The estimate item's id, e.g. "ei100".
+      schema:
+        type: string
+    DailyLogId:
+      name: id
+      in: path
+      required: true
+      description: The daily log's id, e.g. "dl100".
       schema:
         type: string
 
@@ -406,6 +843,14 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     NotFound:
       description: No resource exists with the given id.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadRequest:
+      description: |
+        A required field or query parameter was missing or invalid. The
+        `error` string names what was wrong.
       content:
         application/json:
           schema:
@@ -494,6 +939,22 @@ components:
           items:
             type: string
           description: Ids of subs/vendors (src/data/subsVendors.js) with viewing access to this item.
+        predecessorIds:
+          type: array
+          items:
+            type: string
+          description: |
+            Ids of schedule items on the same job that must FINISH before
+            this item starts (finish-to-start dependencies). Drives the
+            Gantt's dependency arrows, its Critical Path toggle, and the
+            cascade engine that shifts downstream work when a date moves.
+
+            IMPORTANT: because updateScheduleItem is a full replace, you
+            MUST echo this array back on every update or you will silently
+            delete this item's dependency edges. Fetch the item first, then
+            send the whole object back with only your intended change.
+
+            A cycle is rejected (400). Ids must belong to the same job.
         notes:
           type: string
         createdBy:
@@ -507,7 +968,7 @@ components:
           type: string
           format: date-time
           description: ISO 8601 timestamp, refreshed on every update. Read-only.
-      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, notes, createdBy, createdAt, updatedAt]
+      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, predecessorIds, notes, createdBy, createdAt, updatedAt]
 
     ScheduleItemInput:
       type: object
@@ -570,6 +1031,23 @@ components:
           items:
             type: string
           default: []
+        predecessorIds:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Ids of schedule items on the same job that must FINISH before
+            this item starts (finish-to-start dependencies).
+
+            On update this behaves like every other field here — omitting it
+            resets it to [], which DELETES this item's dependency edges. Always
+            echo back the item's existing predecessorIds unless you explicitly
+            intend to clear them. Prefer patchScheduleItem, which only writes
+            the fields you send.
+
+            Rejected with 400 if an id is unknown, belongs to another job, is
+            this item itself, or would create a dependency cycle.
         notes:
           type: string
           default: ''
@@ -612,8 +1090,25 @@ components:
         EstimateGroup's fields plus items and totals, and (only for the
         synthetic placeholder group) a `virtual` flag with `createdAt`
         entirely absent.
+      # Deliberately NOT `allOf: [EstimateGroup, ...]`: EstimateGroup marks
+      # `createdAt` required, but the synthetic "Unassigned" group has no
+      # database row and therefore no createdAt — so inheriting that required
+      # list made getEstimate violate its own response schema for every job
+      # with an empty estimate. Spelled out here with createdAt optional.
+      properties:
+        id:
+          type: string
+        jobId:
+          type: string
+        name:
+          type: string
+        sortOrder:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+          description: Absent entirely on the synthetic "Unassigned" group.
       allOf:
-        - $ref: '#/components/schemas/EstimateGroup'
         - type: object
           properties:
             items:
@@ -629,7 +1124,7 @@ components:
                 placeholder group returned when a job has zero real
                 groups (see getEstimate). Absent entirely — not `false`
                 — on every real, persisted group.
-          required: [items, totals]
+          required: [id, jobId, name, sortOrder, items, totals]
 
     EstimateItemBase:
       type: object
@@ -648,14 +1143,16 @@ components:
         costCode:
           type: string
           description: |
-            Required by the real UI's save-button validation (modeled as
-            required here to match that intended contract), but the
-            server currently accepts a create/update request with this
-            missing — it just defaults to an empty string. Only "00
-            Preconstruction Services" was directly observed live; the
-            rest of this list is the app's seeded working set, not a
-            confirmed exhaustive real catalog.
+            Optional. Leave it blank (`""`) if you do not know the code —
+            do NOT guess: a wrong cost code misfiles the job's costs, which
+            is worse than an unset one, and the blank can be corrected later.
+
+            Only "00 Preconstruction Services" was directly observed live;
+            the rest of this list is the app's seeded working set, not a
+            confirmed exhaustive real catalog, and the server accepts values
+            outside it.
           enum:
+            - ''
             - '00 Preconstruction Services'
             - '01 General Conditions'
             - '02 Site Work'
@@ -756,7 +1253,9 @@ components:
           type: string
         costCode:
           type: string
+          default: ''
           enum:
+            - ''
             - '00 Preconstruction Services'
             - '01 General Conditions'
             - '02 Site Work'
@@ -772,7 +1271,9 @@ components:
             - '23 HVAC'
             - '26 Electrical'
             - '32 Exterior Improvements'
-          description: Modeled as required to match the real UI's save validation — see EstimateItemBase.costCode for the spec-vs-server gap.
+          description: |
+            Optional — the server defaults it to `""`. Leave it blank rather
+            than guessing; see EstimateItemBase.costCode.
         description:
           type: string
           default: ''
@@ -804,7 +1305,7 @@ components:
         sortOrder:
           type: integer
           default: 0
-      required: [jobId, name, costCode]
+      required: [jobId, name]
 
     EstimateTotals:
       type: object
@@ -846,3 +1347,257 @@ components:
         totals:
           $ref: '#/components/schemas/EstimateTotals'
       required: [groups, totals]
+
+    Weather:
+      type: object
+      description: |
+        A weather reading for one job site on one day. Derived
+        deterministically from (jobId, date) by server/weather.js — the same
+        pair always yields the same reading, which is what lets a log's card,
+        detail view and print output agree.
+      properties:
+        summary:
+          type: string
+          description: Human-readable conditions, e.g. "Partly cloudy with isolated showers".
+        icon:
+          type: string
+          description: Glyph key for the summary.
+          enum: [sun, partly-cloudy, cloud, rain, storm]
+        high:
+          type: integer
+          description: Daily high in °F.
+        low:
+          type: integer
+          description: Daily low in °F.
+        wind:
+          type: integer
+          description: Wind speed in mph.
+        humidity:
+          type: integer
+          description: Relative humidity, as a percentage (0-100).
+        precipitation:
+          type: number
+          description: Total precipitation in inches. 0 on dry days.
+        capturedAt:
+          type: string
+          format: date-time
+          description: Nominal observation time — always 06:00 UTC on the log's date.
+      required: [summary, icon, high, low, wind, humidity, precipitation, capturedAt]
+
+    DailyLogPhoto:
+      type: object
+      description: |
+        A photo on a daily log. There are no real image files in this repo, so
+        a photo carries a `tone` that the UI renders as a tinted placeholder
+        tile rather than a URL.
+      properties:
+        id:
+          type: string
+        caption:
+          type: string
+        tone:
+          type: string
+          enum: [stone, slate, sand, clay, moss]
+      required: [id, caption, tone]
+
+    DailyLogComment:
+      type: object
+      properties:
+        id:
+          type: string
+          description: e.g. "dlc100".
+        logId:
+          type: string
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, logId, author, body, createdAt]
+
+    DailyLogInput:
+      type: object
+      description: |
+        The writable fields of a daily log, used by both createDailyLog and
+        updateDailyLog. Note that update is a full replace, not a patch.
+      properties:
+        jobId:
+          type: string
+          description: |
+            Required on create, ignored on update (a log cannot change jobs).
+          example: j1
+        date:
+          type: string
+          format: date
+          description: The day being logged. Required on both create and update.
+        title:
+          type: string
+          maxLength: 50
+          description: Optional. Silently truncated at 50 characters. When empty the UI titles the log by its date.
+        notes:
+          type: string
+          maxLength: 4000
+          description: |
+            Free text, silently truncated at 4000 characters. Conventionally
+            uses the "Progress:" / "Issues:" / "Materials Delivered:" headings
+            from the settings template — the UI splits on those to lay the
+            notes out as labelled sections.
+        tags:
+          type: array
+          items:
+            type: string
+        shareInternal:
+          type: boolean
+          default: true
+        shareSubs:
+          type: boolean
+          default: false
+        shareClient:
+          type: boolean
+          default: false
+        isPrivate:
+          type: boolean
+          default: false
+          description: Private is exclusive — a private log has no other audience.
+        notifyUsers:
+          type: array
+          items:
+            type: string
+          description: Names to notify. Recorded only; this mock sends nothing.
+        includeWeather:
+          type: boolean
+          default: true
+          description: When true, the server snapshots the day's weather onto the log at write time.
+        includeWeatherNotes:
+          type: boolean
+          default: false
+        weatherNotes:
+          type: string
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailyLogPhoto'
+        status:
+          type: string
+          enum: [draft, published]
+          default: published
+      # jobId is required on create and ignored on update — one schema
+      # serves both, so it is listed here (matching ScheduleItemInput's
+      # convention) and updateDailyLog's description says it is ignored.
+      required: [jobId, date]
+
+    DailyLog:
+      allOf:
+        - $ref: '#/components/schemas/DailyLogInput'
+        - type: object
+          description: A stored daily log — the input fields plus server-owned and derived ones.
+          properties:
+            id:
+              type: string
+              description: e.g. "dl100".
+            weather:
+              description: |
+                The snapshot taken at write time, or null when includeWeather
+                is false. Always present as a key — check for null rather than
+                for absence.
+
+                Note for spec readers: `nullable` beside `allOf` is a no-op in
+                OpenAPI 3.0.3 (the nullability does not attach to the composed
+                subschema), so the null case is documented here in prose rather
+                than being machine-readable. Kept as-is because inlining every
+                Weather property just to express it would duplicate the schema.
+              nullable: true
+              allOf:
+                - $ref: '#/components/schemas/Weather'
+            attachments:
+              type: array
+              description: |
+                Read-only, and always an empty array. The live Daily Log form
+                has an Attachments section, but this mock stores no files —
+                nothing reads or writes this beyond echoing it back. It is
+                deliberately absent from DailyLogInput: handing an agent an
+                `attachments` argument would invite it to invent file
+                references that no part of the app can honour.
+              readOnly: true
+              items:
+                type: object
+            likes:
+              type: array
+              items:
+                type: string
+              description: Names who liked the log. Mutated only by toggleDailyLogLike.
+            likeCount:
+              type: integer
+              description: Derived — the length of `likes`.
+            likedByMe:
+              type: boolean
+              description: Derived — whether the hard-coded current user is in `likes`.
+            commentCount:
+              type: integer
+              description: Derived by counting the comments table, so it can never drift from `comments`.
+            comments:
+              type: array
+              description: Present only on getDailyLog and the mutating endpoints — NOT on listDailyLogs.
+              items:
+                $ref: '#/components/schemas/DailyLogComment'
+            createdBy:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+          # Every field below is populated on every read (rowToDailyLog plus
+          # decorate), so an agent can rely on all of them being present.
+          # `weather` is present-but-null when includeWeather is false, and
+          # `comments` is the one exception — single-log reads only.
+          required:
+            [id, jobId, title, date, notes, tags, shareInternal, shareSubs, shareClient,
+             isPrivate, notifyUsers, includeWeather, includeWeatherNotes, weatherNotes,
+             weather, photos, attachments, status, likes, likeCount, likedByMe,
+             commentCount, createdBy, createdAt, updatedAt]
+
+    DailyLogSettings:
+      type: object
+      description: |
+        Company-wide defaults applied to new daily logs at compose time.
+        Editing them never rewrites existing logs.
+      properties:
+        stampLocation:
+          type: boolean
+          description: Whether new logs stamp the job-site location.
+        defaultNotes:
+          type: string
+          description: Template pre-filled into a new log's Notes box.
+        defaultIncludeWeather:
+          type: boolean
+        defaultIncludeWeatherNotes:
+          type: boolean
+        share:
+          type: object
+          description: Default audiences for a new log. `internal` is always true and cannot be cleared.
+          properties:
+            internal:
+              type: boolean
+            subs:
+              type: boolean
+            client:
+              type: boolean
+        notify:
+          type: object
+          description: Which audiences are notified by default. Recorded only; this mock sends nothing.
+          properties:
+            internal:
+              type: boolean
+            subs:
+              type: boolean
+            client:
+              type: boolean
+      # The whole record is returned on every read — there are no optional
+      # fields and no per-job overrides.
+      required:
+        [stampLocation, defaultNotes, defaultIncludeWeather,
+         defaultIncludeWeatherNotes, share, notify]

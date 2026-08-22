@@ -47,3 +47,71 @@ export const IconGearDollar = (p) => <Svg {...p}><circle cx="12" cy="12" r="3" /
 export const IconPeopleTwo = (p) => <Svg {...p}><circle cx="9" cy="8" r="3" /><path d="M3.5 20v-1.5a5.5 5.5 0 0 1 11 0V20" /><path d="M16 5.5a3 3 0 0 1 0 6" /><path d="M15 14a5.5 5.5 0 0 1 5.5 5.5V20" /></Svg>
 export const IconWrench = (p) => <Svg {...p}><path d="M14.5 6.5a4 4 0 0 0-5.4 5.4L4 17l3 3 5.1-5.1a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-.6-.6-2z" /></Svg>
 export const IconHouse = (p) => <Svg {...p}><path d="M4 11l8-7 8 7" /><path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9" /><path d="M10 20v-5h4v5" /></Svg>
+
+// Gantt toolbar icons, captured live from /app/Schedules/{id} Gantt view's
+// right-aligned icon cluster (sliders/share/fullscreen) — redrawn as simple
+// stroke SVGs, same convention as the rest of this file.
+export const IconSliders = (p) => <Svg {...p}><path d="M4 6h10M17 6h3M4 18h3M10 18h10" /><circle cx="14" cy="6" r="2" /><circle cx="7" cy="18" r="2" /></Svg>
+export const IconShare = (p) => <Svg {...p}><circle cx="18" cy="5" r="2.3" /><circle cx="6" cy="12" r="2.3" /><circle cx="18" cy="19" r="2.3" /><path d="M8 10.8l8-4.4M8 13.2l8 4.4" /></Svg>
+export const IconExpand = (p) => <Svg {...p}><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" /></Svg>
+export const IconChevronDown = (p) => <Svg {...p}><path d="M5.5 8.5l6.5 7 6.5-7" /></Svg>
+export const IconCheck = (p) => <Svg {...p}><path d="M4.5 12.5l5 5 10-11" /></Svg>
+export const IconXCircle = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9 9l6 6M15 9l-6 6" /></Svg>
+export const IconEdit = (p) => <Svg {...p}><path d="M4 20l1-4.2L15.6 5.2a1.5 1.5 0 0 1 2.1 0l1.1 1.1a1.5 1.5 0 0 1 0 2.1L8.2 19 4 20z" /><path d="M14 7l3 3" /></Svg>
+
+// --- Daily Logs -----------------------------------------------------------
+// Added for the Daily Logs screens: the list-header actions (gear, printer,
+// filter funnel), the card actions (heart, comment, pencil, photo grid), and
+// the five weather glyphs server/weather.js can return in `icon`.
+export const IconGear = (p) => <Svg {...p}><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" /></Svg>
+export const IconPrinter = (p) => <Svg {...p}><path d="M7 9V3.5h10V9" /><path d="M7 18H5.5A1.5 1.5 0 0 1 4 16.5v-5A1.5 1.5 0 0 1 5.5 10h13a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 1-1.5 1.5H17" /><rect x="7" y="14.5" width="10" height="6" rx="1" /></Svg>
+export const IconFilter = (p) => <Svg {...p}><path d="M3.5 5h17l-6.5 8v6l-4 2v-8z" /></Svg>
+export const IconHeart = ({ filled, ...p }) => (
+  <Svg {...p}><path d="M12 20.5S3.5 15 3.5 9.2A4.7 4.7 0 0 1 12 6.4a4.7 4.7 0 0 1 8.5 2.8c0 5.8-8.5 11.3-8.5 11.3z" fill={filled ? 'currentColor' : 'none'} /></Svg>
+)
+export const IconComment = (p) => <Svg {...p}><path d="M21 11.5a7.7 7.7 0 0 1-8.5 7.5 9 9 0 0 1-2.6-.4L4 21l1.4-4.1A7.4 7.4 0 0 1 3.5 11.5 7.7 7.7 0 0 1 12 4a7.7 7.7 0 0 1 9 7.5z" /></Svg>
+export const IconPhotoGrid = (p) => <Svg {...p}><rect x="3.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.2" /></Svg>
+export const IconArrowLeft = (p) => <Svg {...p}><path d="M20 12H4" /><path d="M10 6l-6 6 6 6" /></Svg>
+export const IconNotebook = (p) => <Svg {...p}><path d="M7 3.5h11a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H7z" /><path d="M7 3.5a2 2 0 0 0 0 4h2v-4z" /><path d="M5 8h2M5 12h2M5 16h2" /><path d="M11 8h5M11 12h5" /></Svg>
+export const IconExternalLink = (p) => <Svg {...p}><path d="M14 4h6v6" /><path d="M20 4l-8.5 8.5" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></Svg>
+export const IconTrash = (p) => <Svg {...p}><path d="M4 6.5h16" /><path d="M9 6.5V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 6.5l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /><path d="M10 10.5v6M14 10.5v6" /></Svg>
+export const IconPlus = (p) => <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>
+export const IconX = (p) => <Svg {...p}><path d="M6 6l12 12M18 6L6 18" /></Svg>
+export const IconLock = (p) => <Svg {...p}><rect x="4.5" y="10" width="15" height="10.5" rx="1.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></Svg>
+export const IconPaperclip = (p) => <Svg {...p}><path d="M20 11.5l-8.4 8.4a5 5 0 0 1-7-7l8.8-8.8a3.4 3.4 0 0 1 4.8 4.8l-8.8 8.8a1.8 1.8 0 0 1-2.5-2.5l8.1-8.1" /></Svg>
+export const IconEllipsis = (p) => <Svg {...p}><circle cx="5" cy="12" r="1.2" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.2" fill="currentColor" stroke="none" /></Svg>
+export const IconArrowUp = (p) => <Svg {...p}><path d="M12 20V4" /><path d="M6 10l6-6 6 6" /></Svg>
+export const IconArrowDown = (p) => <Svg {...p}><path d="M12 4v16" /><path d="M6 14l6 6 6-6" /></Svg>
+
+// Weather glyphs, keyed to server/weather.js's `icon` values. Coloured
+// rather than currentColor so the forecast reads at a glance the way the
+// live weather widget's does.
+export const IconWeatherSun = ({ className = 'h-6 w-6' }) => (
+  <svg viewBox="0 0 24 24" className={className}><circle cx="12" cy="12" r="4.6" fill="#ffc26f" /><g stroke="#ffc26f" strokeWidth="1.8" strokeLinecap="round"><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M4.9 19.1l1.7-1.7M17.4 6.6l1.7-1.7" /></g></svg>
+)
+export const IconWeatherPartlyCloudy = ({ className = 'h-6 w-6' }) => (
+  <svg viewBox="0 0 24 24" className={className}><circle cx="9" cy="8.5" r="3.6" fill="#ffc26f" /><path d="M8 19.5a3.8 3.8 0 0 1 0-7.6 5 5 0 0 1 9.5 1.1 3.3 3.3 0 0 1-.6 6.5z" fill="#c7d0d9" /></svg>
+)
+export const IconWeatherCloud = ({ className = 'h-6 w-6' }) => (
+  <svg viewBox="0 0 24 24" className={className}><path d="M7.5 19a4.2 4.2 0 0 1 0-8.4 5.5 5.5 0 0 1 10.4 1.2A3.6 3.6 0 0 1 17.2 19z" fill="#acb8c3" /></svg>
+)
+export const IconWeatherRain = ({ className = 'h-6 w-6' }) => (
+  <svg viewBox="0 0 24 24" className={className}><path d="M7.5 15.5a4.2 4.2 0 0 1 0-8.4 5.5 5.5 0 0 1 10.4 1.2 3.6 3.6 0 0 1-.7 7.2z" fill="#acb8c3" /><g stroke="#0763fb" strokeWidth="1.8" strokeLinecap="round"><path d="M8.5 18l-1 3M12 18l-1 3M15.5 18l-1 3" /></g></svg>
+)
+export const IconWeatherStorm = ({ className = 'h-6 w-6' }) => (
+  <svg viewBox="0 0 24 24" className={className}><path d="M7.5 15.5a4.2 4.2 0 0 1 0-8.4 5.5 5.5 0 0 1 10.4 1.2 3.6 3.6 0 0 1-.7 7.2z" fill="#8f9ba8" /><path d="M12.8 16l-3.3 4.4h2.4l-1 3.1 3.6-4.8h-2.4z" fill="#ffc26f" stroke="none" /></svg>
+)
+
+// Dispatches on server/weather.js's `icon` value. A component rather than a
+// plain lookup map so this file keeps exporting only components (oxlint's
+// react(only-export-components) rule / fast-refresh). Falls back to the
+// neutral cloud so an unrecognised value still renders something sensible.
+export function WeatherIcon({ icon, className }) {
+  switch (icon) {
+    case 'sun': return <IconWeatherSun className={className} />
+    case 'partly-cloudy': return <IconWeatherPartlyCloudy className={className} />
+    case 'rain': return <IconWeatherRain className={className} />
+    case 'storm': return <IconWeatherStorm className={className} />
+    default: return <IconWeatherCloud className={className} />
+  }
+}

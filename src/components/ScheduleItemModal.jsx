@@ -2,20 +2,9 @@ import { useState } from 'react'
 import Modal from './Modal'
 import { scheduleColors, reminderOptions, phaseOptions } from '../data/scheduleColors'
 import { subsVendors } from '../data/subsVendors'
+import { endFromWorkDays, workDaysBetween, todayIso } from '../lib/dates'
 
-const TABS = ['Phases & Tags', 'Viewing', 'Notes']
-
-function toISO(d) {
-  return d.toISOString().slice(0, 10)
-}
-function addDays(iso, days) {
-  const d = new Date(iso + 'T00:00:00')
-  d.setDate(d.getDate() + days)
-  return toISO(d)
-}
-function dayDiff(a, b) {
-  return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000) + 1
-}
+const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Notes']
 
 // Layout (Complete toggle, Title/Display Color, Assignees, Start Date/Work
 // Days/End Date, Hourly, Progress, Reminder, Phases & Tags / Viewing /
@@ -24,14 +13,14 @@ function dayDiff(a, b) {
 // Links, Files, Shifts, RFIs, and Related Items were observed but are not
 // implemented here (flagged in CAPTURE_LOG.md) — Notes is simplified to a
 // single field instead of the real All/Internal/Sub/Client split.
-export default function ScheduleItemModal({ item, jobSubIds, onSave, onDelete, onCopy, onClose }) {
+export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, onDelete, onCopy, onClose }) {
   const isEditing = Boolean(item?.id)
   const [form, setForm] = useState(() => ({
     title: item?.title ?? '',
     color: item?.color ?? 'Victoria',
     assignees: item?.assignees ?? '',
-    start: item?.start ?? toISO(new Date()),
-    end: item?.end ?? toISO(new Date()),
+    start: item?.start ?? todayIso(),
+    end: item?.end ?? todayIso(),
     workDays: item?.workDays ?? 1,
     hourly: item?.hourly ?? false,
     progress: item?.progress ?? 0,
@@ -42,9 +31,10 @@ export default function ScheduleItemModal({ item, jobSubIds, onSave, onDelete, o
     showOnGantt: item?.showOnGantt ?? true,
     showClient: item?.showClient ?? true,
     subIds: item?.subIds ?? [],
+    predecessorIds: item?.predecessorIds ?? [],
     notes: item?.notes ?? '',
   }))
-  const [tab, setTab] = useState('Phases & Tags')
+  const [tab, setTab] = useState('Predecessors & Links')
   const [tagInput, setTagInput] = useState('')
   const [showRequired, setShowRequired] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -52,18 +42,21 @@ export default function ScheduleItemModal({ item, jobSubIds, onSave, onDelete, o
 
   const setField = (key, value) => setForm((f) => ({ ...f, [key]: value }))
 
+  // Start / Work Days / End are three views of two facts, and "Work Days"
+  // means WORKING days — so the end date skips weekends. Editing any one of
+  // them re-derives the others through the work calendar.
   const onStartChange = (val) => {
     setField('start', val)
-    setField('end', addDays(val, form.workDays - 1))
+    setField('end', endFromWorkDays(val, form.workDays))
   }
   const onWorkDaysChange = (val) => {
     const days = Math.max(1, Number(val) || 1)
     setField('workDays', days)
-    setField('end', addDays(form.start, days - 1))
+    setField('end', endFromWorkDays(form.start, days))
   }
   const onEndChange = (val) => {
     setField('end', val)
-    setField('workDays', Math.max(1, dayDiff(form.start, val)))
+    setField('workDays', Math.max(1, workDaysBetween(form.start, val)))
   }
 
   const availableSubs = subsVendors.filter((s) => (jobSubIds || []).includes(s.id))
@@ -234,6 +227,39 @@ export default function ScheduleItemModal({ item, jobSubIds, onSave, onDelete, o
               </button>
             ))}
           </div>
+
+          {tab === 'Predecessors & Links' && (
+            <div className="mt-3 space-y-2">
+              <div className="text-sm font-semibold text-gray-90">Predecessors</div>
+              <div className="text-xs text-gray-50">
+                Finish-to-start: this item won't be able to start before the checked items finish. Drives the Gantt view's dependency arrows and Critical Path highlighting.
+              </div>
+              {(allItems || []).filter((i) => i.id !== item?.id).length === 0 ? (
+                <div className="text-sm text-gray-50">No other schedule items on this job yet.</div>
+              ) : (
+                <div className="max-h-48 space-y-1 overflow-y-auto">
+                  {(allItems || []).filter((i) => i.id !== item?.id).map((i) => {
+                    const checked = form.predecessorIds.includes(i.id)
+                    return (
+                      <label key={i.id} className="flex items-center gap-2 rounded-sm px-1 py-1 text-sm text-gray-80 hover:bg-gray-5">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setField(
+                            'predecessorIds',
+                            checked ? form.predecessorIds.filter((id) => id !== i.id) : [...form.predecessorIds, i.id],
+                          )}
+                        />
+                        <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: scheduleColors.find((c) => c.name === i.color)?.hex }} />
+                        <span className="truncate">{i.title}</span>
+                        <span className="ml-auto shrink-0 text-xs text-gray-40">{i.start}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {tab === 'Phases & Tags' && (
             <div className="mt-3 space-y-4">
