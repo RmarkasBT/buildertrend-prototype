@@ -15,6 +15,8 @@ import {
 import * as estimates from './estimateRoutes.js'
 import * as dailyLogs from './dailyLogRoutes.js'
 import { jobIdError } from './jobs.js'
+import { cascade, analyze } from '../src/lib/cascade.js'
+import { isISODate, todayIso } from '../src/lib/dates.js'
 import { validateDailyLogBody, validateEstimateItemBody } from './validate.js'
 import { ensureSeeded } from './seed.js'
 
@@ -99,6 +101,76 @@ const server = createServer(async (req, res) => {
       const invalid = validateItem(preparedNewItem(body), body.jobId, null)
       if (invalid) return send(res, 400, { error: invalid })
       return send(res, 201, createItem(body))
+    }
+
+    // Fixed sub-path, so it MUST be matched before ID_ROUTE below or
+    // "cascade-preview" gets read as a schedule item id. (It happens to be safe
+    // today only because ID_ROUTE is guarded to PUT/PATCH/DELETE — exactly the
+    // kind of accidental safety that breaks when someone adds GET /:id.)
+    if (pathname === '/api/schedule/cascade-preview' && req.method === 'POST') {
+      const body = await readBody(req)
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+
+      const requests = body.changes ?? []
+      if (!Array.isArray(requests)) {
+        return send(res, 400, { error: 'changes must be an array of { itemId, shiftDays } or { itemId, start, workDays }' })
+      }
+      for (const [i, r] of requests.entries()) {
+        if (!r || typeof r !== 'object') return send(res, 400, { error: `changes[${i}] must be an object` })
+        if (typeof r.itemId !== 'string' || !r.itemId) return send(res, 400, { error: `changes[${i}].itemId is required` })
+        if (r.start !== undefined && !isISODate(r.start)) {
+          return send(res, 400, { error: `changes[${i}].start must be YYYY-MM-DD (got ${JSON.stringify(r.start)})` })
+        }
+        if (r.shiftDays !== undefined && !Number.isInteger(Number(r.shiftDays))) {
+          return send(res, 400, { error: `changes[${i}].shiftDays must be a whole number of work days (got ${JSON.stringify(r.shiftDays)})` })
+        }
+        if (r.workDays !== undefined && (!Number.isInteger(Number(r.workDays)) || Number(r.workDays) < 1)) {
+          return send(res, 400, { error: `changes[${i}].workDays must be an integer >= 1 (got ${JSON.stringify(r.workDays)})` })
+        }
+        if (r.start === undefined && r.shiftDays === undefined && r.workDays === undefined) {
+          return send(res, 400, { error: `changes[${i}] needs at least one of shiftDays, start or workDays` })
+        }
+      }
+
+      const items = listItems(body.jobId)
+      const plan = cascade(items, requests, { mode: body.mode, today: todayIso() })
+
+      if (!plan.ok) {
+        if (plan.error === 'unknown_item') {
+          return send(res, 400, {
+            error: `unknown schedule item(s) for this job: ${plan.unknownIds.join(', ')}`,
+            unknownIds: plan.unknownIds,
+          })
+        }
+        if (plan.error === 'cycle') {
+          const name = (id) => items.find((i) => i.id === id)?.title ?? id
+          // 422, not 400: the request is well-formed, the stored graph isn't.
+          return send(res, 422, {
+            error: `this job's dependencies contain a loop, so nothing can be scheduled from them: ${plan.cycleIds.map(name).join(' -> ')}`,
+            cycleIds: plan.cycleIds,
+          })
+        }
+        return send(res, 400, { error: plan.error })
+      }
+
+      // Per-item float is what lets a caller say "absorbs into 5 days of slack"
+      // instead of reporting every slip as a delay. Opt-in because it roughly
+      // doubles the payload, and payload is tokens for an agent.
+      let analysis
+      if (body.includeAnalysis) {
+        const base = analyze(items)
+        analysis = base.ok
+          ? [...base.nodes.values()].map((n) => ({
+              itemId: n.id,
+              totalFloat: n.totalFloat,
+              freeFloat: n.freeFloat,
+              critical: n.critical,
+            }))
+          : []
+      }
+
+      return send(res, 200, { ...plan, ...(analysis ? { analysis } : {}) })
     }
 
     const idMatch = pathname.match(ID_ROUTE)

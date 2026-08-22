@@ -189,6 +189,79 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/schedule/cascade-preview:
+    post:
+      operationId: previewScheduleCascade
+      tags: [Schedule]
+      summary: Ask what would happen if schedule dates moved — writes nothing.
+      description: |
+        Answers "if these items moved, what else moves, and does the job finish
+        later?" **This is read-only** — no schedule item is modified. Call it
+        freely; it is the intended way to reason about a date change before
+        proposing one.
+
+        USE THIS INSTEAD OF DOING THE ARITHMETIC YOURSELF. Dependencies,
+        durations, weekends and the critical path interact in ways that are easy
+        to get wrong by hand, and a confidently wrong date is worse than no
+        answer. Anything you compute yourself will disagree with what the Gantt
+        shows the user.
+
+        Each entry in `changes` names one item and how it moves — send
+        `shiftDays` to push it (WORK days, so 2 on a Thursday lands Monday),
+        `start` to place it on a date, and/or `workDays` to change its duration.
+        Successors then move by the same rule, preserving whatever gap they
+        already had, and never being pulled earlier than they already sit.
+
+        Send `changes: []` for a pure read: you still get `projectEnd` and
+        `criticalIds` for the job as it stands.
+
+        Add `includeAnalysis: true` for per-item float. Float is what
+        distinguishes "this slips 3 days and the job finishes 3 days later" from
+        "this slips 3 days into slack it already had and the finish date does not
+        move" — worth asking for whenever you intend to describe the impact of a
+        delay, and worth omitting otherwise since it roughly doubles the reply.
+
+        Items marked complete are never moved. If the ripple wanted to move one,
+        it is reported in `conflicts` rather than silently ignored, and the items
+        behind it are reported as blocked — so say so rather than claiming the
+        dates changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CascadePreviewInput'
+            example:
+              jobId: j1
+              changes:
+                - itemId: s2
+                  shiftDays: 2
+      responses:
+        '200':
+          description: What would change. Nothing has been written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CascadePreviewResult'
+        '400':
+          description: |
+            Unknown jobId, an unknown itemId, or a malformed `changes` entry —
+            the message names which.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: |
+            This job's stored dependencies contain a loop, so no ordering exists
+            and nothing can be computed from them. `cycleIds` names the loop.
+            Report it — it is a data problem for a human to fix, not something to
+            retry or work around.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/estimate:
     get:
       operationId: getEstimate
@@ -1052,6 +1125,168 @@ components:
           type: string
           default: ''
       required: [jobId, title, start, end]
+
+    CascadePreviewInput:
+      type: object
+      description: Request body for previewScheduleCascade.
+      properties:
+        jobId:
+          type: string
+          description: The job whose schedule to reason about.
+        changes:
+          type: array
+          description: |
+            The moves to test. Empty array is valid and means "just tell me about
+            the schedule as it stands".
+          items:
+            $ref: '#/components/schemas/CascadeChangeRequest'
+          default: []
+        mode:
+          type: string
+          description: |
+            `rigid` (default) moves successors by the full delta, keeping the gap
+            they already had — what a superintendent expects when a chain slips.
+            `float-aware` moves a successor only once its own slack is used up,
+            which produces a smaller ripple.
+          enum: [rigid, float-aware]
+          default: rigid
+        includeAnalysis:
+          type: boolean
+          description: Include per-item float (see the operation description).
+          default: false
+      required: [jobId]
+
+    CascadeChangeRequest:
+      type: object
+      description: |
+        One item and how it moves. Needs at least one of `shiftDays`, `start` or
+        `workDays`; sending only `itemId` is an error, since it asks for no change.
+      properties:
+        itemId:
+          type: string
+          description: Id of a schedule item on this job.
+        shiftDays:
+          type: integer
+          description: |
+            Push out by this many WORK days (negative pulls earlier). 2 on a
+            Thursday lands the following Monday — weekends are skipped rather
+            than absorbing the delay.
+        start:
+          type: string
+          format: date
+          description: Place the item on this exact date instead of shifting it.
+        workDays:
+          type: integer
+          description: Change the duration, in working days. The end date is re-derived.
+      required: [itemId]
+
+    CascadePreviewResult:
+      type: object
+      description: |
+        The consequences of the requested moves. Nothing here has been written —
+        to actually apply it, a human approves it in the Impacts panel.
+      properties:
+        ok:
+          type: boolean
+        mode:
+          type: string
+          enum: [rigid, float-aware]
+        changes:
+          type: array
+          description: |
+            Every item whose dates would change, including the ones you asked for
+            (`role: direct`) and the ones that move as a consequence
+            (`role: cascade`). An empty array means the moves changed nothing.
+          items:
+            type: object
+            properties:
+              itemId: { type: string }
+              title: { type: string }
+              role:
+                type: string
+                enum: [direct, cascade]
+              from: { $ref: '#/components/schemas/CascadeDates' }
+              to: { $ref: '#/components/schemas/CascadeDates' }
+              deltaDays:
+                type: integer
+                description: |
+                  Calendar days the start moved. Can exceed the work-day shift you
+                  asked for when the move crosses a weekend — a 2-work-day push on
+                  a Thursday is +4 calendar days.
+        conflicts:
+          type: array
+          description: |
+            Items the ripple wanted to move but could not, with the reason. A
+            completed item is never moved. Report these rather than implying the
+            dates changed.
+          items:
+            type: object
+            properties:
+              itemId: { type: string }
+              title: { type: string }
+              reason:
+                type: string
+                enum: [complete]
+              wantedStart: { type: string, format: date }
+              currentStart: { type: string, format: date }
+        warnings:
+          type: array
+          description: Items that did move but deserve a caveat — e.g. work already under way.
+          items:
+            type: object
+            properties:
+              itemId: { type: string }
+              title: { type: string }
+              reason:
+                type: string
+                enum: [in_progress]
+              progress: { type: integer }
+        counts:
+          type: object
+          description: How many items moved directly vs. as a knock-on effect.
+          properties:
+            direct: { type: integer }
+            cascade: { type: integer }
+        projectEnd:
+          type: object
+          description: |
+            The job's finish date before and after. `deltaDays` of 0 means the
+            slip was absorbed by existing slack and the job still finishes on
+            time — the single most useful number here.
+          properties:
+            before: { type: string, format: date }
+            after: { type: string, format: date }
+            deltaDays: { type: integer }
+        criticalIds:
+          type: array
+          description: Items on the critical path AFTER the moves — no slack, so any further slip moves the finish date.
+          items: { type: string }
+        analysis:
+          type: array
+          description: Present only when `includeAnalysis` was true. Float is in work days.
+          items:
+            type: object
+            properties:
+              itemId: { type: string }
+              totalFloat:
+                type: integer
+                description: Work days this can slip before the job's finish date moves.
+              freeFloat:
+                type: integer
+                description: Work days this can slip before any successor moves.
+              critical: { type: boolean }
+      required: [ok, changes, conflicts, warnings, counts, projectEnd, criticalIds]
+
+    CascadeDates:
+      type: object
+      description: An item's start, end and duration.
+      properties:
+        start: { type: string, format: date }
+        end: { type: string, format: date }
+        workDays:
+          type: integer
+          description: Duration in WORKING days, so end is not simply start + workDays.
+      required: [start, end, workDays]
 
     # ---------- Estimate ----------
 
