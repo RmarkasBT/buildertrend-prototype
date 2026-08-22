@@ -18,6 +18,12 @@ server/*.db-journal
 server/*.db-wal
 server/*.db-shm
 
+# Secrets and the Python agent's virtualenv
+.env
+.venv/
+__pycache__/
+*.pyc
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

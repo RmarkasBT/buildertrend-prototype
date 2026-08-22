@@ -3,6 +3,7 @@ import { useJob } from '../context/JobContext'
 import { useSchedule } from '../hooks/useSchedule'
 import { colorHex } from '../data/scheduleColors'
 import ScheduleItemModal from '../components/ScheduleItemModal'
+import AssistantPanel from '../components/AssistantPanel'
 
 // Tabs (Schedule/Baseline/Workday Exceptions), view toggle (Calendar/List/
 // Gantt), toolbar (gear/undo/Schedule Offline/More Actions/Filter/New
@@ -37,12 +38,13 @@ function toISODate(d) {
 
 export default function Schedule() {
   const { currentJob } = useJob()
-  const { items, loading, error, save, remove, copy } = useSchedule(currentJob?.id)
+  const { items, loading, error, save, remove, copy, refresh } = useSchedule(currentJob?.id)
   const [view, setView] = useState('Calendar')
   const [tab, setTab] = useState('Schedule')
   const [monthOffset, setMonthOffset] = useState(0)
   const [editingItem, setEditingItem] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   const base = new Date(2026, 7, 1) // August 2026, matching the captured screenshot
   const cursor = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1)
@@ -109,6 +111,12 @@ export default function Schedule() {
               </label>
               <button className="rounded-sm border border-gray-20 px-2 py-1">More Actions ▾</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1">▽ Filter</button>
+              <button
+                onClick={() => setAssistantOpen(true)}
+                className="rounded-sm border border-brand-blue px-3 py-1 font-semibold text-brand-blue"
+              >
+                ✨ AI Assistant
+              </button>
               <button onClick={openCreate} className="rounded-sm bg-brand-blue px-3 py-1 font-semibold text-white">
                 + New Schedule Item
               </button>
@@ -241,6 +249,10 @@ export default function Schedule() {
           onCopy={handleCopy}
           onClose={closeModal}
         />
+      )}
+
+      {assistantOpen && (
+        <AssistantPanel jobId={currentJob.id} onClose={() => setAssistantOpen(false)} onChanged={refresh} />
       )}
     </div>
   )

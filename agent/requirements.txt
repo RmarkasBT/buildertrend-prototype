@@ -1,0 +1,6 @@
+google-adk
+litellm>=1.93.0
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv

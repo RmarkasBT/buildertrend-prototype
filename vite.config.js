@@ -6,7 +6,12 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    // Port must match server/index.js's PORT.
-    proxy: { '/api': 'http://localhost:4000' },
+    proxy: {
+      // Port must match server/index.js's PORT.
+      '/api': 'http://localhost:4000',
+      // Port must match agent/server.py's uvicorn --port (see dev:agent script).
+      // agent/server.py only defines /chat (no /agent prefix), so strip it here.
+      '/agent': { target: 'http://localhost:8001', changeOrigin: true, rewrite: (path) => path.replace(/^\/agent/, '') },
+    },
   },
 })
