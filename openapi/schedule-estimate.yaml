@@ -262,6 +262,84 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/schedule/batch:
+    post:
+      operationId: applyScheduleCascade
+      tags: [Schedule]
+      summary: Move schedule dates for real, cascading and undoable, in one write.
+      description: |
+        Applies date changes and the knock-on moves they cause, as ONE atomic
+        write, recording a change set so the whole thing can be undone together.
+
+        USE THIS FOR ANY DATE CHANGE, not updateScheduleItem. Moving a bar
+        almost always pushes the work behind it, and updateScheduleItem moves
+        exactly one item: use it for dates and you leave the schedule
+        contradicting its own dependencies — a successor starting before the
+        predecessor it waits on. Doing it as several updateScheduleItem calls is
+        no better; one can fail after the others have landed, and there is no
+        record tying them together to undo.
+
+        Takes the same `changes` shape as previewScheduleCascade, so the normal
+        sequence is: preview it, tell the user what moves, apply the identical
+        payload once they agree. Preview first for anything beyond a single
+        unblocked item — the ripple is often much larger than it looks.
+
+        `reason` is shown to the user in the schedule's history, so write it for
+        them ("Pushed framing 2 days for the rain delay"), not for the log.
+
+        The response echoes the same shape the preview returned, plus the
+        `changeSet` that was recorded and the job's full refreshed item list.
+        Report what actually happened from `counts` and `projectEnd` rather than
+        from what you intended — completed items are never moved, and any the
+        ripple wanted to move come back in `conflicts`.
+
+        A request that turns out to change nothing is a success with
+        `changeSet: null`, not an error. Nothing was written, so say so.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CascadeApplyInput'
+            example:
+              jobId: j1
+              changes:
+                - itemId: s2
+                  shiftDays: 2
+              reason: Pushed framing 2 days for the rain delay
+      responses:
+        '200':
+          description: |
+            Applied. `changeSet` is null when the request changed nothing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changeSet:
+                    $ref: '#/components/schemas/ScheduleChangeSet'
+                  items:
+                    type: array
+                    description: The job's full schedule after the write.
+                    items:
+                      $ref: '#/components/schemas/ScheduleItem'
+                  plan:
+                    $ref: '#/components/schemas/CascadePreviewResult'
+        '400':
+          description: Unknown jobId, unknown itemId, or a malformed change entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: |
+            The job's dependencies contain a loop. Nothing was written. Report it
+            rather than retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/estimate:
     get:
       operationId: getEstimate
@@ -1276,6 +1354,78 @@ components:
                 description: Work days this can slip before any successor moves.
               critical: { type: boolean }
       required: [ok, changes, conflicts, warnings, counts, projectEnd, criticalIds]
+
+    CascadeApplyInput:
+      type: object
+      # Deliberately a flat copy of CascadePreviewInput plus reason/origin,
+      # rather than `allOf` composing the two. ADK's OpenAPI-to-tool parser does
+      # not flatten allOf in a requestBody, so composing produced a tool with no
+      # jobId parameter at all — the endpoint worked under curl while the agent
+      # got "jobId is required" on every attempt. Keep these two in sync by hand.
+      description: Request body for applyScheduleCascade.
+      properties:
+        jobId:
+          type: string
+          description: The job whose schedule to change.
+        changes:
+          type: array
+          description: The moves to apply. Same shape as previewScheduleCascade.
+          items:
+            $ref: '#/components/schemas/CascadeChangeRequest'
+          default: []
+        mode:
+          type: string
+          description: |
+            `rigid` (default) moves successors by the full delta, keeping their
+            existing gap. `float-aware` moves one only once its slack is used up.
+          enum: [rigid, float-aware]
+          default: rigid
+        reason:
+          type: string
+          description: |
+            Human-facing note shown in the schedule's history. Write it for the
+            user ("Pushed framing 2 days for the rain delay"), not for a log.
+          default: ''
+        origin:
+          type: string
+          description: What initiated this. Use 'batch' from an agent.
+          enum: [batch, gantt_drag, gantt_edit, impact_approve]
+          default: batch
+      required: [jobId, changes]
+
+    ScheduleChangeSet:
+      type: object
+      description: |
+        One atomic batch of schedule writes, with the prior value of everything
+        it touched — which is what makes it undoable as a unit.
+      properties:
+        id:
+          type: string
+          description: e.g. "cs100". Undo is a UI action; there is no tool for it.
+        jobId: { type: string }
+        origin:
+          type: string
+          enum: [batch, gantt_drag, gantt_edit, impact_approve, undo]
+        originRef:
+          type: string
+          description: For an undo, the id of the change set it reverted.
+        reason: { type: string }
+        counts:
+          type: object
+          properties:
+            direct: { type: integer }
+            cascade: { type: integer }
+        projectEnd:
+          type: object
+          properties:
+            before: { type: string, format: date }
+            after: { type: string, format: date }
+        undoneBy:
+          type: string
+          description: Id of the change set that reverted this one; '' if still in effect.
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, jobId, origin, counts, projectEnd, createdBy, createdAt]
 
     CascadeDates:
       type: object

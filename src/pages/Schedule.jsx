@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useJob } from '../context/JobContext'
 import { useSchedule } from '../hooks/useSchedule'
 import { colorHex } from '../data/scheduleColors'
-import { addDays, toISODate } from '../lib/dates'
+import { addDays, toISODate, fmtDateShort } from '../lib/dates'
 import ScheduleItemModal from '../components/ScheduleItemModal'
 import AssistantPanel from '../components/AssistantPanel'
 import GanttChart from '../components/GanttChart'
@@ -36,7 +36,10 @@ function buildMonthGrid(year, month) {
 
 export default function Schedule() {
   const { currentJob } = useJob()
-  const { items, loading, error, save, remove, copy, refresh } = useSchedule(currentJob?.id)
+  const {
+    items, loading, error, writeError, clearWriteError,
+    save, remove, copy, refresh, applyChanges, undo, lastChangeSet,
+  } = useSchedule(currentJob?.id)
   const [view, setView] = useState('Calendar')
   const [tab, setTab] = useState('Schedule')
   const [monthOffset, setMonthOffset] = useState(0)
@@ -143,6 +146,38 @@ export default function Schedule() {
           {error && (
             <div className="mt-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
               Couldn't load the schedule: {error}
+            </div>
+          )}
+
+          {/* A rejected write used to fail silently — the bar just snapped back
+              with no explanation. The server's message names the field or the
+              dependency loop, so show it verbatim. */}
+          {writeError && (
+            <div className="mt-3 flex items-start justify-between gap-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
+              <span>Couldn't save that change: {writeError}</span>
+              <button onClick={clearWriteError} className="shrink-0 font-semibold underline">Dismiss</button>
+            </div>
+          )}
+
+          {/* One click reverts every item the last cascade touched. Undo has to
+              be this reachable, or nobody risks a change that moves 9 bars. */}
+          {lastChangeSet && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-sm bg-info-bg px-3 py-2 text-sm text-gray-80">
+              <span>
+                {lastChangeSet.reason || 'Schedule updated'} — moved{' '}
+                {lastChangeSet.counts.direct + lastChangeSet.counts.cascade} item
+                {lastChangeSet.counts.direct + lastChangeSet.counts.cascade === 1 ? '' : 's'}
+                {lastChangeSet.counts.cascade > 0 && ` (${lastChangeSet.counts.cascade} downstream)`}
+                {lastChangeSet.projectEnd.before !== lastChangeSet.projectEnd.after
+                  ? `, finish now ${fmtDateShort(lastChangeSet.projectEnd.after)}`
+                  : ', finish date unchanged'}
+              </span>
+              <button
+                onClick={() => undo(lastChangeSet.id).catch(() => {})}
+                className="shrink-0 font-semibold text-brand-blue underline"
+              >
+                Undo
+              </button>
             </div>
           )}
 
@@ -271,7 +306,7 @@ export default function Schedule() {
               {items.length === 0 ? (
                 <div className="rounded-md border border-gray-15 bg-white py-6 text-center text-sm text-gray-50">No schedule items yet.</div>
               ) : (
-                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} />
+                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} onApplyChanges={applyChanges} />
               )}
             </div>
           )}

@@ -12,7 +12,11 @@ import * as scheduleApi from '../api/scheduleApi'
 export function useSchedule(jobId) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
+  // `error` is a failure to LOAD; `writeError` is a rejected mutation. They
+  // render differently — one replaces the view, the other annotates it.
   const [error, setError] = useState(null)
+  const [writeError, setWriteError] = useState(null)
+  const [lastChangeSet, setLastChangeSet] = useState(null)
 
   const refresh = useCallback(() => {
     if (!jobId) {
@@ -32,12 +36,64 @@ export function useSchedule(jobId) {
     refresh()
   }, [refresh])
 
-  const save = useCallback(
-    (form) => (form.id ? scheduleApi.updateItem(form.id, form) : scheduleApi.createItem(jobId, form)).then(refresh),
-    [jobId, refresh],
+  // Every mutation funnels through this so a rejected write can't vanish.
+  // Previously these were bare `.then(refresh)` with no catch, so a 400 from
+  // the server (a dependency loop, a bad field) became an unhandled promise
+  // rejection and the user saw nothing at all — the bar just snapped back.
+  const run = useCallback(
+    (promise) =>
+      promise.then(
+        (result) => {
+          setWriteError(null)
+          return refresh().then(() => result)
+        },
+        (err) => {
+          setWriteError(err.message)
+          return refresh().then(() => Promise.reject(err))
+        },
+      ),
+    [refresh],
   )
-  const remove = useCallback((item) => scheduleApi.deleteItem(item.id).then(refresh), [refresh])
-  const copy = useCallback((item) => scheduleApi.copyItem(item).then(refresh), [refresh])
 
-  return { items, loading, error, save, remove, copy, refresh }
+  const save = useCallback(
+    (form) => run(form.id ? scheduleApi.updateItem(form.id, form) : scheduleApi.createItem(jobId, form)),
+    [jobId, run],
+  )
+  const remove = useCallback((item) => run(scheduleApi.deleteItem(item.id)), [run])
+  const copy = useCallback((item) => run(scheduleApi.copyItem(item)), [run])
+
+  // Date moves go through batch, not save: moving a bar usually moves its
+  // successors too, and that has to be one atomic, undoable write.
+  const applyChanges = useCallback(
+    (changes, opts) =>
+      run(scheduleApi.batchUpdate(jobId, changes, opts)).then((res) => {
+        if (res?.changeSet) setLastChangeSet(res.changeSet)
+        return res
+      }),
+    [jobId, run],
+  )
+
+  const undo = useCallback(
+    (changeSetId, opts) =>
+      run(scheduleApi.undoChangeSet(changeSetId, opts)).then((res) => {
+        setLastChangeSet(null)
+        return res
+      }),
+    [run],
+  )
+
+  return {
+    items,
+    loading,
+    error,
+    writeError,
+    clearWriteError: () => setWriteError(null),
+    save,
+    remove,
+    copy,
+    refresh,
+    applyChanges,
+    undo,
+    lastChangeSet,
+  }
 }

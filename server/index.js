@@ -15,6 +15,7 @@ import {
 import * as estimates from './estimateRoutes.js'
 import * as dailyLogs from './dailyLogRoutes.js'
 import { jobIdError } from './jobs.js'
+import { applyBatch, undoChangeSet, getChangeSet, listChangeSets } from './changeSets.js'
 import { cascade, analyze } from '../src/lib/cascade.js'
 import { isISODate, todayIso } from '../src/lib/dates.js'
 import { validateDailyLogBody, validateEstimateItemBody } from './validate.js'
@@ -50,7 +51,41 @@ function readBody(req) {
   })
 }
 
+/**
+ * Validate a `changes` array for cascade-preview and batch. Shared so the two
+ * cannot drift — a body the preview accepts must be one the batch accepts, or
+ * an agent gets a clean preview and then a 400 on apply.
+ * Returns an error string, or null.
+ */
+function validateCascadeChanges(changes) {
+  const list = changes ?? []
+  if (!Array.isArray(list)) {
+    return 'changes must be an array of { itemId, shiftDays } or { itemId, start, workDays }'
+  }
+  for (const [i, r] of list.entries()) {
+    if (!r || typeof r !== 'object') return `changes[${i}] must be an object`
+    if (typeof r.itemId !== 'string' || !r.itemId) return `changes[${i}].itemId is required`
+    if (r.start !== undefined && !isISODate(r.start)) {
+      return `changes[${i}].start must be YYYY-MM-DD (got ${JSON.stringify(r.start)})`
+    }
+    if (r.shiftDays !== undefined && !Number.isInteger(Number(r.shiftDays))) {
+      return `changes[${i}].shiftDays must be a whole number of work days (got ${JSON.stringify(r.shiftDays)})`
+    }
+    if (r.workDays !== undefined && (!Number.isInteger(Number(r.workDays)) || Number(r.workDays) < 1)) {
+      return `changes[${i}].workDays must be an integer >= 1 (got ${JSON.stringify(r.workDays)})`
+    }
+    if (r.start === undefined && r.shiftDays === undefined && r.workDays === undefined) {
+      return `changes[${i}] needs at least one of shiftDays, start or workDays`
+    }
+  }
+  return null
+}
+
 const ID_ROUTE = /^\/api\/schedule\/([^/]+)$/
+// /undo is matched before the bare /:id below, same reason the daily-log block
+// puts its fixed sub-paths first.
+const CHANGE_SET_UNDO_ROUTE = /^\/api\/change-sets\/([^/]+)\/undo$/
+const CHANGE_SET_ID_ROUTE = /^\/api\/change-sets\/([^/]+)$/
 const ESTIMATE_GROUP_ROUTE = /^\/api\/estimate\/groups\/([^/]+)$/
 const ESTIMATE_ITEM_ROUTE = /^\/api\/estimate\/items\/([^/]+)$/
 const ESTIMATE_ITEM_DUPLICATE_ROUTE = /^\/api\/estimate\/items\/([^/]+)\/duplicate$/
@@ -113,25 +148,8 @@ const server = createServer(async (req, res) => {
       if (badJob) return send(res, 400, { error: badJob })
 
       const requests = body.changes ?? []
-      if (!Array.isArray(requests)) {
-        return send(res, 400, { error: 'changes must be an array of { itemId, shiftDays } or { itemId, start, workDays }' })
-      }
-      for (const [i, r] of requests.entries()) {
-        if (!r || typeof r !== 'object') return send(res, 400, { error: `changes[${i}] must be an object` })
-        if (typeof r.itemId !== 'string' || !r.itemId) return send(res, 400, { error: `changes[${i}].itemId is required` })
-        if (r.start !== undefined && !isISODate(r.start)) {
-          return send(res, 400, { error: `changes[${i}].start must be YYYY-MM-DD (got ${JSON.stringify(r.start)})` })
-        }
-        if (r.shiftDays !== undefined && !Number.isInteger(Number(r.shiftDays))) {
-          return send(res, 400, { error: `changes[${i}].shiftDays must be a whole number of work days (got ${JSON.stringify(r.shiftDays)})` })
-        }
-        if (r.workDays !== undefined && (!Number.isInteger(Number(r.workDays)) || Number(r.workDays) < 1)) {
-          return send(res, 400, { error: `changes[${i}].workDays must be an integer >= 1 (got ${JSON.stringify(r.workDays)})` })
-        }
-        if (r.start === undefined && r.shiftDays === undefined && r.workDays === undefined) {
-          return send(res, 400, { error: `changes[${i}] needs at least one of shiftDays, start or workDays` })
-        }
-      }
+      const badChanges = validateCascadeChanges(body.changes)
+      if (badChanges) return send(res, 400, { error: badChanges })
 
       const items = listItems(body.jobId)
       const plan = cascade(items, requests, { mode: body.mode, today: todayIso() })
@@ -173,6 +191,41 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { ...plan, ...(analysis ? { analysis } : {}) })
     }
 
+    // Atomic multi-item write. Also a fixed sub-path, so it goes above ID_ROUTE.
+    if (pathname === '/api/schedule/batch' && req.method === 'POST') {
+      const body = await readBody(req)
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      const badChanges = validateCascadeChanges(body.changes)
+      if (badChanges) return send(res, 400, { error: badChanges })
+
+      // All awaits are done. From here it's plan -> reserve ids -> BEGIN.
+      const result = applyBatch(body.jobId, body.changes ?? [], {
+        mode: body.mode,
+        origin: body.origin,
+        originRef: body.originRef,
+        reason: body.reason,
+      })
+
+      if (result.error === 'unknown_item') {
+        return send(res, 400, {
+          error: `unknown schedule item(s) for this job: ${result.unknownIds.join(', ')}`,
+          unknownIds: result.unknownIds,
+        })
+      }
+      if (result.error === 'cycle') {
+        return send(res, 422, {
+          error: `this job's dependencies contain a loop, so nothing was changed: ${result.cycleIds.join(' -> ')}`,
+          cycleIds: result.cycleIds,
+        })
+      }
+      if (result.noop) {
+        // A drag that lands where it started. Nothing written, nothing to undo.
+        return send(res, 200, { changeSet: null, items: result.items, plan: result.plan })
+      }
+      return send(res, 200, result)
+    }
+
     const idMatch = pathname.match(ID_ROUTE)
     // PATCH and PUT are the same handler: updateItem merges over the stored row
     // either way. PATCH is the honest name for those semantics and is what the
@@ -194,6 +247,47 @@ const server = createServer(async (req, res) => {
       const ok = deleteItem(idMatch[1])
       if (!ok) return send(res, 404, { error: 'not found' })
       return send(res, 204)
+    }
+
+    // --- Change sets (schedule history + undo) --------------------------
+    if (pathname === '/api/change-sets' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      return send(res, 200, listChangeSets(jobId, searchParams.get('limit')))
+    }
+
+    const undoMatch = pathname.match(CHANGE_SET_UNDO_ROUTE)
+    if (undoMatch && req.method === 'POST') {
+      const body = await readBody(req)
+      const result = undoChangeSet(undoMatch[1], { force: body.force === true })
+      if (result.error === 'not_found') return send(res, 404, { error: 'change set not found' })
+      if (result.error === 'already_undone') {
+        return send(res, 409, {
+          error: `already undone by ${result.undoneBy}`,
+          undoneBy: result.undoneBy,
+        })
+      }
+      if (result.error === 'stale') {
+        return send(res, 409, {
+          error: `these items changed since this was applied, so undoing would discard that work: ${result.itemIds.join(', ')}. Re-send with force:true to undo anyway.`,
+          itemIds: result.itemIds,
+        })
+      }
+      if (result.error === 'items_deleted') {
+        return send(res, 409, {
+          error: `these items no longer exist: ${result.itemIds.join(', ')}. Re-send with force:true to undo the rest.`,
+          itemIds: result.itemIds,
+        })
+      }
+      return send(res, 200, result)
+    }
+
+    const changeSetMatch = pathname.match(CHANGE_SET_ID_ROUTE)
+    if (changeSetMatch && req.method === 'GET') {
+      const set = getChangeSet(changeSetMatch[1])
+      if (!set) return send(res, 404, { error: 'change set not found' })
+      return send(res, 200, set)
     }
 
     if (pathname === '/api/estimate' && req.method === 'GET') {

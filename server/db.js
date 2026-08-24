@@ -79,13 +79,62 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- Applied schedule mutations -------------------------------------------
+  -- A change set is one atomic batch of schedule writes plus the prior value
+  -- of everything it touched. That snapshot is the whole point: it's what
+  -- makes a multi-item date change undoable, and without undo nobody presses
+  -- a button that moves eight bars at once.
+  --
+  -- Deliberately NOT impact-specific. Every multi-item write goes through
+  -- this pair — a Gantt drag, an approved impact, a batch call — so one undo
+  -- implementation serves all of them, and the Schedule page's dormant
+  -- history button has something real to show.
+  CREATE TABLE IF NOT EXISTS schedule_change_sets (
+    id            TEXT PRIMARY KEY,
+    job_id        TEXT NOT NULL,
+    -- 'gantt_drag' | 'gantt_edit' | 'gantt_link' | 'batch' | 'impact_approve' | 'undo'
+    origin        TEXT NOT NULL DEFAULT 'batch',
+    origin_ref    TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    direct_count  INTEGER NOT NULL DEFAULT 0,
+    cascade_count INTEGER NOT NULL DEFAULT 0,
+    -- Precomputed so the history row can say "pushed the finish out 2 days"
+    -- without re-running CPM over a schedule that has since moved on.
+    project_end_before TEXT NOT NULL DEFAULT '',
+    project_end_after  TEXT NOT NULL DEFAULT '',
+    -- Points at the 'undo' change set that reverted this one. Undo is itself
+    -- recorded as a change set, so it is auditable and non-destructive.
+    undone_by     TEXT NOT NULL DEFAULT '',
+    created_by    TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_schedule_change_sets_job_id
+    ON schedule_change_sets(job_id);
+
+  CREATE TABLE IF NOT EXISTS schedule_change_items (
+    change_set_id TEXT NOT NULL,
+    item_id       TEXT NOT NULL,
+    -- 'direct' (explicitly requested) | 'cascade' (dependency ripple).
+    -- Drives the "2 direct + 5 downstream" disclosure in the UI.
+    role          TEXT NOT NULL DEFAULT 'direct',
+    -- Full before/after as JSON rather than columns, so a change set can
+    -- revert a predecessor-edge edit or a title change, not just dates.
+    prior         TEXT NOT NULL DEFAULT '{}',
+    next          TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (change_set_id, item_id)
+  );
 `)
 
 const initCounter = db.prepare(`INSERT INTO meta (key, value) VALUES ('next_schedule_id', '100')
   ON CONFLICT(key) DO NOTHING`)
 initCounter.run()
 
-for (const [key, start] of [['next_estimate_group_id', '100'], ['next_estimate_item_id', '100']]) {
+for (const [key, start] of [
+  ['next_estimate_group_id', '100'],
+  ['next_estimate_item_id', '100'],
+  ['next_change_set_id', '100'],
+]) {
   db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`).run(key, start)
 }
 
@@ -177,6 +226,66 @@ export function nextScheduleId() {
   } catch (err) {
     db.exec('ROLLBACK')
     throw err
+  }
+}
+
+const readCounter = db.prepare('SELECT value FROM meta WHERE key = ?')
+const writeCounter = db.prepare('UPDATE meta SET value = ? WHERE key = ?')
+
+/**
+ * Reserve `count` ids in one go, WITHOUT opening a transaction.
+ *
+ * Every `next*Id()` above wraps itself in its own BEGIN/COMMIT, and SQLite has
+ * no nested transactions — so calling one inside a batch's transaction throws
+ * "cannot start a transaction within a transaction" (verified, not assumed).
+ * Worse, if it somehow didn't, its COMMIT would commit the *outer* transaction
+ * early and destroy exactly the rollback the batch was written for.
+ *
+ * So a transactional handler reserves its ids up front, before BEGIN, and this
+ * function deliberately does not open one. It's still atomic in practice:
+ * node:sqlite is synchronous, so nothing can interleave between the read and
+ * the write as long as the caller doesn't `await` across it.
+ *
+ * Reserving is one-way — ids from a rolled-back batch are simply burned. That's
+ * the right trade: a gap in `s104..s106` costs nothing, a duplicate id corrupts.
+ */
+export function reserveIds(key, prefix, count = 1) {
+  const row = readCounter.get(key)
+  if (!row) throw new Error(`unknown counter ${key}`)
+  const start = Number(row.value)
+  writeCounter.run(String(start + count), key)
+  return Array.from({ length: count }, (_, i) => `${prefix}${start + i}`)
+}
+
+/** One change-set id. Reserve before opening a transaction — see reserveIds. */
+export function nextChangeSetId() {
+  return reserveIds('next_change_set_id', 'cs', 1)[0]
+}
+
+// DB row <-> wire shape for change sets and their per-item snapshots.
+export function rowToChangeSet(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    origin: row.origin,
+    originRef: row.origin_ref,
+    reason: row.reason,
+    counts: { direct: row.direct_count, cascade: row.cascade_count },
+    projectEnd: { before: row.project_end_before, after: row.project_end_after },
+    undoneBy: row.undone_by,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+  }
+}
+
+export function rowToChangeItem(row) {
+  if (!row) return null
+  return {
+    itemId: row.item_id,
+    role: row.role,
+    prior: JSON.parse(row.prior || '{}'),
+    next: JSON.parse(row.next || '{}'),
   }
 }
 

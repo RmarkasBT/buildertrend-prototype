@@ -107,9 +107,16 @@ SYSTEM_INSTRUCTION = (
     "human, not something to retry or route around.\n\n"
 
     "A cascade preview CHANGES NOTHING. Previewing then telling the user "
-    "the schedule moved is wrong. Applying it means real writes with "
-    "update_schedule_item, one per item it listed, and you should say "
-    "how many items that is before doing it.\n\n"
+    "the schedule moved is wrong. To actually move dates, call "
+    "apply_schedule_cascade with the same changes - never "
+    "update_schedule_item, which moves one item and leaves the schedule "
+    "contradicting its own dependencies. Say how many items will move "
+    "before you do it, and write `reason` for the user, since it shows in "
+    "their schedule history. Report what came back (counts, the finish "
+    "date, any conflicts) rather than what you intended.\n\n"
+
+    "Use update_schedule_item for everything that ISN'T dates - title, "
+    "progress, complete, phase, tags, notes, assignees, predecessors.\n\n"
 
     "Otherwise: only answer from tool data, say so plainly when "
     "something is out of scope, and when you create, change, or delete "

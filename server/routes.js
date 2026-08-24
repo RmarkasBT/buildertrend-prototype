@@ -247,6 +247,71 @@ export function updateItem(id, body) {
   return rowToItem(selectById.get(id))
 }
 
+const patchDatesStmt = db.prepare(`
+  UPDATE schedule_items SET
+    start_date = @start_date, end_date = @end_date, work_days = @work_days,
+    updated_at = @updated_at
+  WHERE id = @id
+`)
+
+const patchDatesAndFieldsStmt = db.prepare(`
+  UPDATE schedule_items SET
+    start_date = @start_date, end_date = @end_date, work_days = @work_days,
+    title = @title, predecessor_ids = @predecessor_ids, progress = @progress,
+    complete = @complete, updated_at = @updated_at
+  WHERE id = @id
+`)
+
+/**
+ * Write ONLY the fields a cascade or an undo actually owns.
+ *
+ * Deliberately not built on updateItem: that round-trips the whole row through
+ * itemToRow, which defaults every absent field — so a dates-only caller would
+ * silently clear `predecessorIds`, i.e. the dependency graph the cascade was
+ * just computed from. Narrowing the SQL is what makes that structurally
+ * impossible rather than a thing to remember.
+ *
+ * `patch` carries start/end/workDays; undo also restores the other tracked
+ * fields, so those are written only when present.
+ *
+ * Synchronous by design — callers invoke this inside a transaction, where an
+ * await would hand control back to the event loop mid-write.
+ */
+export function patchDates(id, patch, now = new Date().toISOString()) {
+  const existing = selectById.get(id)
+  if (!existing) return null
+
+  const base = {
+    id,
+    start_date: patch.start ?? existing.start_date,
+    end_date: patch.end ?? existing.end_date,
+    work_days: patch.workDays ?? existing.work_days,
+    updated_at: now,
+  }
+
+  const restoresMore =
+    patch.title !== undefined ||
+    patch.predecessorIds !== undefined ||
+    patch.progress !== undefined ||
+    patch.complete !== undefined
+
+  if (!restoresMore) {
+    patchDatesStmt.run(base)
+  } else {
+    patchDatesAndFieldsStmt.run({
+      ...base,
+      title: patch.title ?? existing.title,
+      predecessor_ids:
+        patch.predecessorIds !== undefined
+          ? JSON.stringify(patch.predecessorIds)
+          : existing.predecessor_ids,
+      progress: patch.progress ?? existing.progress,
+      complete: patch.complete !== undefined ? (patch.complete ? 1 : 0) : existing.complete,
+    })
+  }
+  return rowToItem(selectById.get(id))
+}
+
 export function deleteItem(id) {
   const existing = selectById.get(id)
   if (!existing) return false

@@ -16,7 +16,7 @@ import {
 // CPM lives in the cascade engine so the Critical Path toggle and the impact
 // cascade can never disagree about which items are critical — they were
 // separate implementations of the same forward/backward pass before.
-import { computeCriticalIds, itemDuration } from '../lib/cascade'
+import { computeCriticalIds, itemDuration, wouldCreateCycle } from '../lib/cascade'
 import { IconSliders, IconShare, IconExpand, IconChevronDown, IconCheck, IconXCircle, IconEdit, IconCirclePlus } from './icons'
 
 // Real Buildertrend Gantt (/app/Schedules/{id}, Gantt tab) captured live:
@@ -60,7 +60,7 @@ function ToggleSwitch({ checked, onChange, label }) {
   )
 }
 
-export default function GanttChart({ items, onUpdateItem, onCreateItem }) {
+export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges }) {
   const [zoom, setZoom] = useState('Day')
   const [groupByPhase, setGroupByPhase] = useState(false)
   const [showCritical, setShowCritical] = useState(false)
@@ -70,6 +70,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem }) {
   const [editForm, setEditForm] = useState(null)
   const [dragPreview, setDragPreview] = useState(null)
   const [linkDraft, setLinkDraft] = useState(null)
+  const [linkError, setLinkError] = useState(null)
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
   const rowRefs = useRef(new Map())
@@ -166,10 +167,22 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem }) {
   const cancelEdit = () => { setEditingId(null); setEditForm(null) }
   const saveEdit = (item) => {
     const workDays = Math.max(1, Number(editForm.workDays) || 1)
-    // workDays are WORKING days, so the end date skips weekends — 5 days from
-    // a Thursday finishes the following Wednesday, not Monday.
-    const end = endFromWorkDays(editForm.start, workDays)
-    onUpdateItem({ ...item, title: editForm.title, start: editForm.start, workDays, end })
+    const titleChanged = editForm.title !== item.title
+    const datesChanged = editForm.start !== item.start || workDays !== itemDuration(item)
+
+    // Title is a plain field edit; dates have to cascade. Doing them as two
+    // calls keeps the change set purely about dates, so undo restores the
+    // schedule shape without also reverting a rename the user meant to keep.
+    if (titleChanged) onUpdateItem({ ...item, title: editForm.title })
+    if (datesChanged && onApplyChanges) {
+      onApplyChanges([{ itemId: item.id, start: editForm.start, workDays }], {
+        origin: 'gantt_edit',
+        reason: `Edited ${item.title}`,
+      })
+    } else if (datesChanged) {
+      // workDays are WORKING days, so the end date skips weekends.
+      onUpdateItem({ ...item, start: editForm.start, workDays, end: endFromWorkDays(editForm.start, workDays) })
+    }
     cancelEdit()
   }
 
@@ -206,16 +219,26 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem }) {
       // moved along. A move keeps the duration and re-derives the end through
       // the work calendar; a resize changes the duration to whatever working
       // days the new span actually contains.
+      //
+      // All three go through onApplyChanges (POST /batch) rather than a single
+      // PUT: dragging a bar almost always pushes its successors, and that has to
+      // land as one atomic, undoable write.
+      let change
       if (mode === 'move') {
-        const newStart = addDays(orig.start, deltaDays)
-        const workDays = itemDuration(item)
-        onUpdateItem({ ...item, start: newStart, end: endFromWorkDays(newStart, workDays), workDays })
+        change = { itemId: item.id, start: addDays(orig.start, deltaDays), workDays: itemDuration(item) }
       } else if (mode === 'resize-start') {
         const newStart = minISO(addDays(orig.start, deltaDays), orig.end)
-        onUpdateItem({ ...item, start: newStart, end: orig.end, workDays: workDaysBetween(newStart, orig.end) })
+        change = { itemId: item.id, start: newStart, workDays: workDaysBetween(newStart, orig.end) }
       } else {
         const newEnd = maxISO(addDays(orig.end, deltaDays), orig.start)
-        onUpdateItem({ ...item, start: orig.start, end: newEnd, workDays: workDaysBetween(orig.start, newEnd) })
+        change = { itemId: item.id, start: orig.start, workDays: workDaysBetween(orig.start, newEnd) }
+      }
+      const verb = mode === 'move' ? 'Moved' : 'Resized'
+      if (onApplyChanges) {
+        onApplyChanges([change], { origin: 'gantt_drag', reason: `${verb} ${item.title}` })
+      } else {
+        const end = endFromWorkDays(change.start, change.workDays)
+        onUpdateItem({ ...item, start: change.start, end, workDays: change.workDays })
       }
       setSelectedId(item.id)
     }
@@ -242,7 +265,18 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem }) {
       if (targetId && targetId !== fromItem.id) {
         const targetItem = items.find((i) => i.id === targetId)
         if (targetItem && !(targetItem.predecessorIds || []).includes(fromItem.id)) {
-          onUpdateItem({ ...targetItem, predecessorIds: [...(targetItem.predecessorIds || []), fromItem.id] })
+          const next = [...(targetItem.predecessorIds || []), fromItem.id]
+          // Check before writing. The server rejects a cycle too, but only this
+          // side can name the loop in the user's own task titles instead of
+          // surfacing an id list after a failed round-trip.
+          const loop = wouldCreateCycle(items, targetItem.id, next)
+          if (loop) {
+            const titles = loop.map((id) => items.find((i) => i.id === id)?.title ?? id)
+            setLinkError(`That would make the schedule circular: ${titles.join(' → ')}`)
+            return
+          }
+          setLinkError(null)
+          onUpdateItem({ ...targetItem, predecessorIds: next })
         }
       }
     }

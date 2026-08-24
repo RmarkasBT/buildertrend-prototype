@@ -290,6 +290,24 @@ def check_routes(spec: dict) -> None:
         if not (r[1] == "PATCH" and r[0] in documented_puts and r not in spec_ops)
     }
 
+    # Change sets are deliberately NOT in the spec, so they never become tools.
+    #
+    # Undo reverts a change a human made on purpose; whether to take it back is
+    # the human's call, and an agent that can silently revert the user's work is
+    # a worse failure than one that can't. The two GETs are read-only and
+    # harmless, but the agent doesn't need schedule history to do its job and
+    # every tool costs tokens on every request — the UI calls them directly.
+    #
+    # POST /api/schedule/batch IS documented, deliberately: the agent can
+    # already move dates one at a time via updateScheduleItem, which is strictly
+    # worse (non-atomic, no cascade, no undo record, and it leaves the schedule
+    # violating its own dependencies). Batch replaces a capability it has rather
+    # than granting a new one.
+    impl = {
+        r for r in impl
+        if not (r[0].startswith("/api/change-sets") and r not in spec_ops)
+    }
+
     undocumented = impl - spec_ops
     if undocumented:
         fail(
