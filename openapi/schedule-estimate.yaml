@@ -147,9 +147,10 @@ paths:
         VALIDATION (all `400`, with a message naming the problem): blank
         title; a date that isn't `YYYY-MM-DD`; `end` before `start`;
         `workDays` not an integer >= 1; `progress` outside 0–100; a
-        `predecessorIds` entry that is unknown, duplicated, belongs to
-        another job, or is this item itself; and any edit that would create
-        a dependency cycle (the error names the loop).
+        predecessor that is unknown, duplicated, belongs to another job, or is
+        this item itself; a link `type` other than FS/SS or a non-integer
+        `lag`; and any edit that would create a dependency loop (the error
+        names the loop).
       requestBody:
         required: true
         content:
@@ -1090,22 +1091,24 @@ components:
           items:
             type: string
           description: Ids of subs/vendors (src/data/subsVendors.js) with viewing access to this item.
+        predecessors:
+          type: array
+          description: |
+            What this item waits on. THIS is the field to write; it drives the
+            Gantt's dependency arrows, the Critical Path toggle, and the
+            cascade that shifts downstream work when a date moves.
+          items:
+            $ref: '#/components/schemas/PredecessorLink'
         predecessorIds:
           type: array
           items:
             type: string
           description: |
-            Ids of schedule items on the same job that must FINISH before
-            this item starts (finish-to-start dependencies). Drives the
-            Gantt's dependency arrows, its Critical Path toggle, and the
-            cascade engine that shifts downstream work when a date moves.
-
-            IMPORTANT: because updateScheduleItem is a full replace, you
-            MUST echo this array back on every update or you will silently
-            delete this item's dependency edges. Fetch the item first, then
-            send the whole object back with only your intended change.
-
-            A cycle is rejected (400). Ids must belong to the same job.
+            Read-only convenience: just the ids from `predecessors`, for when
+            you only need "what does this wait on" and don't care about link
+            types. DERIVED on every read, so it can never disagree with
+            `predecessors` — write to that field instead. Anything sent here is
+            treated as finish-to-start with zero lag.
         notes:
           type: string
         createdBy:
@@ -1119,7 +1122,7 @@ components:
           type: string
           format: date-time
           description: ISO 8601 timestamp, refreshed on every update. Read-only.
-      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, predecessorIds, notes, createdBy, createdAt, updatedAt]
+      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, predecessors, predecessorIds, notes, createdBy, createdAt, updatedAt]
 
     ScheduleItemInput:
       type: object
@@ -1182,23 +1185,28 @@ components:
           items:
             type: string
           default: []
+        predecessors:
+          type: array
+          items:
+            $ref: '#/components/schemas/PredecessorLink'
+          default: []
+          description: |
+            What this item waits on. Send the whole array — it replaces the
+            item's links, so omitting it on an update leaves them alone but
+            sending a shorter array removes the ones you left out.
+
+            Rejected with 400 if an id is unknown, belongs to another job, is
+            this item itself, is linked twice, carries a type other than FS/SS
+            or a non-integer lag, or would create a dependency loop.
         predecessorIds:
           type: array
           items:
             type: string
           default: []
           description: |
-            Ids of schedule items on the same job that must FINISH before
-            this item starts (finish-to-start dependencies).
-
-            On update this behaves like every other field here — omitting it
-            resets it to [], which DELETES this item's dependency edges. Always
-            echo back the item's existing predecessorIds unless you explicitly
-            intend to clear them. Prefer patchScheduleItem, which only writes
-            the fields you send.
-
-            Rejected with 400 if an id is unknown, belongs to another job, is
-            this item itself, or would create a dependency cycle.
+            Shorthand accepted in place of `predecessors`: bare ids, each read
+            as finish-to-start with zero lag. Prefer `predecessors` unless you
+            genuinely mean plain FS links with no lag.
         notes:
           type: string
           default: ''
@@ -1354,6 +1362,47 @@ components:
                 description: Work days this can slip before any successor moves.
               critical: { type: boolean }
       required: [ok, changes, conflicts, warnings, counts, projectEnd, criticalIds]
+
+    PredecessorLink:
+      type: object
+      description: |
+        One dependency: this item waits on `id`, in the manner given by `type`,
+        offset by `lag` working days.
+      properties:
+        id:
+          type: string
+          description: A schedule item on the same job. Must not be this item, and must not close a loop.
+        type:
+          type: string
+          description: |
+            `FS` (finish-to-start) — the predecessor must FINISH first. The
+            common case: framing waits on the foundation.
+
+            `SS` (start-to-start) — the two START together, or this one can't
+            start until the other has. Use it for trades that genuinely run
+            side by side, like electrical and plumbing rough-in sharing the
+            same walls. An SS successor does NOT wait for the predecessor to
+            finish, so don't reach for it just to make two bars overlap.
+          enum: [FS, SS]
+          default: FS
+        lag:
+          type: integer
+          description: |
+            Working days of offset, and it may be NEGATIVE.
+
+            Positive is lag — wait this long after the predecessor's finish (FS)
+            or start (SS). Use it for cure and dry time: concrete before
+            framing, stucco before the next coat. A cure window is calendar
+            time and cannot be shortened by adding crew.
+
+            Negative is lead — start this many working days EARLIER, i.e.
+            before the predecessor is done. `lag: -1` on an FS link means
+            "start a day before the drywall is finished".
+
+            Zero means the next working day after the predecessor finishes
+            (FS), or the same day it starts (SS).
+          default: 0
+      required: [id]
 
     CascadeApplyInput:
       type: object

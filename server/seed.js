@@ -8,11 +8,11 @@ const insertStmt = db.prepare(`
   INSERT INTO schedule_items (
     id, job_id, title, color, assignees, start_date, end_date, work_days,
     hourly, progress, reminder, complete, phase, tags, show_on_gantt,
-    show_client, sub_ids, predecessor_ids, notes, created_by, created_at, updated_at
+    show_client, sub_ids, predecessor_ids, predecessors, notes, created_by, created_at, updated_at
   ) VALUES (
     @id, @job_id, @title, @color, @assignees, @start_date, @end_date, @work_days,
     @hourly, @progress, @reminder, @complete, @phase, @tags, @show_on_gantt,
-    @show_client, @sub_ids, @predecessor_ids, @notes, @created_by, @created_at, @updated_at
+    @show_client, @sub_ids, @predecessor_ids, @predecessors, @notes, @created_by, @created_at, @updated_at
   )
 `)
 

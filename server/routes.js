@@ -10,11 +10,11 @@ const insertStmt = db.prepare(`
   INSERT INTO schedule_items (
     id, job_id, title, color, assignees, start_date, end_date, work_days,
     hourly, progress, reminder, complete, phase, tags, show_on_gantt,
-    show_client, sub_ids, predecessor_ids, notes, created_by, created_at, updated_at
+    show_client, sub_ids, predecessor_ids, predecessors, notes, created_by, created_at, updated_at
   ) VALUES (
     @id, @job_id, @title, @color, @assignees, @start_date, @end_date, @work_days,
     @hourly, @progress, @reminder, @complete, @phase, @tags, @show_on_gantt,
-    @show_client, @sub_ids, @predecessor_ids, @notes, @created_by, @created_at, @updated_at
+    @show_client, @sub_ids, @predecessor_ids, @predecessors, @notes, @created_by, @created_at, @updated_at
   )
 `)
 
@@ -25,7 +25,7 @@ const updateStmt = db.prepare(`
     hourly = @hourly, progress = @progress, reminder = @reminder,
     complete = @complete, phase = @phase, tags = @tags,
     show_on_gantt = @show_on_gantt, show_client = @show_client,
-    sub_ids = @sub_ids, predecessor_ids = @predecessor_ids, notes = @notes, updated_at = @updated_at
+    sub_ids = @sub_ids, predecessor_ids = @predecessor_ids, predecessors = @predecessors, notes = @notes, updated_at = @updated_at
   WHERE id = @id
 `)
 
@@ -65,19 +65,32 @@ export function validateItem(merged, jobId, selfId = null) {
   const progress = Number(merged.progress ?? 0)
   if (!Number.isFinite(progress) || progress < 0 || progress > 100) return 'progress must be between 0 and 100'
 
-  const preds = merged.predecessorIds ?? []
-  if (!Array.isArray(preds)) return 'predecessorIds must be an array of schedule item ids'
-  if (preds.length) {
-    if (selfId && preds.includes(selfId)) return 'an item cannot be its own predecessor'
+  // Validate the typed links, which is the canonical shape. `predecessorIds` is
+  // derived from them, so checking one checks both.
+  const links = Array.isArray(merged.predecessors)
+    ? merged.predecessors
+    : (merged.predecessorIds ?? []).map((id) => ({ id, type: 'FS', lag: 0 }))
+  if (!Array.isArray(links)) return 'predecessors must be an array of links'
+  if (links.length) {
+    const ids = links.map((l) => l.id)
+    if (selfId && ids.includes(selfId)) return 'an item cannot be its own predecessor'
     const siblings = listItems(jobId)
     const known = new Set(siblings.map((s) => s.id))
-    const bad = preds.filter((p) => !known.has(p))
-    if (bad.length) {
-      return `unknown predecessorIds for this job: ${bad.join(', ')}`
+    const bad = ids.filter((p) => !known.has(p))
+    if (bad.length) return `unknown predecessors for this job: ${bad.join(', ')}`
+    if (new Set(ids).size !== ids.length) {
+      return 'the same predecessor is linked twice — one link per pair of items'
     }
-    if (new Set(preds).size !== preds.length) return 'predecessorIds contains duplicates'
+    for (const l of links) {
+      if (l.type !== undefined && l.type !== 'FS' && l.type !== 'SS') {
+        return `predecessor type must be "FS" (finish-to-start) or "SS" (start-to-start), got ${JSON.stringify(l.type)}`
+      }
+      if (l.lag !== undefined && !Number.isInteger(Number(l.lag))) {
+        return `predecessor lag must be a whole number of work days, negative for lead time (got ${JSON.stringify(l.lag)})`
+      }
+    }
     if (selfId) {
-      const cycle = wouldCreateCycle(siblings, selfId, preds)
+      const cycle = wouldCreateCycle(siblings, selfId, links)
       if (cycle) {
         const titles = cycle.map((id) => siblings.find((s) => s.id === id)?.title ?? id)
         return `that would create a dependency loop: ${titles.join(' -> ')}`
@@ -155,6 +168,17 @@ export function validateBody(body) {
   // An array into the TEXT `assignees` column threw a 500 outright. And the
   // 0/1 boolean columns accepted anything truthy, so `complete: "yes"` stored
   // as complete and `hourly: 123` stored as hourly.
+  if (body.predecessors !== undefined) {
+    if (!Array.isArray(body.predecessors)) {
+      return `predecessors must be an array of { id, type, lag } links (got ${typeof body.predecessors})`
+    }
+    for (const [i, l] of body.predecessors.entries()) {
+      if (!l || typeof l !== 'object' || Array.isArray(l)) {
+        return `predecessors[${i}] must be an object like { "id": "s2", "type": "FS", "lag": 0 }`
+      }
+      if (typeof l.id !== 'string' || !l.id) return `predecessors[${i}].id is required`
+    }
+  }
   for (const key of ['tags', 'subIds', 'predecessorIds']) {
     if (body[key] === undefined) continue
     if (!Array.isArray(body[key])) {
@@ -257,7 +281,7 @@ const patchDatesStmt = db.prepare(`
 const patchDatesAndFieldsStmt = db.prepare(`
   UPDATE schedule_items SET
     start_date = @start_date, end_date = @end_date, work_days = @work_days,
-    title = @title, predecessor_ids = @predecessor_ids, progress = @progress,
+    title = @title, predecessor_ids = @predecessor_ids, predecessors = @predecessors, progress = @progress,
     complete = @complete, updated_at = @updated_at
   WHERE id = @id
 `)

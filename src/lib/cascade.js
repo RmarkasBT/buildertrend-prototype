@@ -13,9 +13,27 @@
 // plain no-JSX module under src/lib/ is importable from both sides with no
 // build changes (same trick server/mcp.js uses for src/data/jobs.js).
 //
-// DEPENDENCY MODEL: finish-to-start only. `predecessorIds` on an item lists
-// items that must FINISH before it starts. Gaps in the current dates are read
-// as intentional lag and preserved.
+// DEPENDENCY MODEL, matching what Buildertrend documents:
+//
+//   FS (finish-to-start) — "one task must finish before the next can start".
+//                          The common case: framing waits on foundation.
+//   SS (start-to-start)  — "two tasks start at the same time, or one can't
+//                          start until another has started". Rough plumbing
+//                          and rough electrical progress together.
+//
+// Each link also carries LAG, in working days, and it can be negative:
+//   lag  2  FS -> start two working days AFTER the predecessor finishes
+//              (wait for concrete to cure before framing)
+//   lag  0  FS -> start the next working day after it finishes
+//   lag -1  FS -> LEAD time: start one working day BEFORE it finishes
+//              (begin painting a day before the drywall is done)
+//
+// Lag being explicit is what replaced inferring it from whatever gap happened
+// to be between two bars. A declared lag is a constraint; any gap BEYOND it is
+// the scheduler's own slack, which rigid mode preserves separately.
+//
+// The canonical field is `predecessors: [{ id, type, lag }]`. `predecessorIds`
+// is still present on the wire but is DERIVED from it — see server/db.js.
 //
 // DURATION IS IN WORK DAYS; POSITION IS IN CALENDAR DAYS. `workDays` means
 // working days — verified against the fixtures, where business-day math
@@ -41,12 +59,71 @@ import {
   ALL_DAYS,
   endFromWorkDays,
   workDaysBetween,
-  workDayGap,
   addWorkDays,
+  stepWorkDays,
   nextWorkDay,
 } from './dates.js'
 
 export { WEEKDAYS_ONLY, ALL_DAYS }
+
+export const LINK_TYPES = ['FS', 'SS']
+
+/**
+ * An item's predecessor links, normalized.
+ *
+ * Accepts either the canonical `predecessors: [{id, type, lag}]` or the older
+ * bare `predecessorIds: [id]`, which is read as FS with zero lag. Keeping the
+ * fallback means the engine works against a row written before the migration,
+ * and against an agent that only sent ids.
+ */
+export function linksOf(item) {
+  if (Array.isArray(item.predecessors) && item.predecessors.length) {
+    return item.predecessors
+      .filter((l) => l && typeof l.id === 'string')
+      .map((l) => ({
+        id: l.id,
+        type: LINK_TYPES.includes(l.type) ? l.type : 'FS',
+        lag: Number.isFinite(Number(l.lag)) ? Math.trunc(Number(l.lag)) : 0,
+      }))
+  }
+  return (item.predecessorIds || []).map((id) => ({ id, type: 'FS', lag: 0 }))
+}
+
+/**
+ * The earliest `succ` may start given one predecessor's dates.
+ *
+ * FS: the next working day after the predecessor finishes, then shifted by lag.
+ * SS: the predecessor's own start, shifted by lag.
+ */
+function earliestStart(link, predDates, calendar) {
+  // Anchor FIRST, then apply the lag from it. The anchor must be snapped
+  // FORWARD in both cases, even for a negative lag: "the next working day after
+  // the predecessor finishes" is a fixed point, and lead time steps back from
+  // there. Letting the snap follow the sign of the lag put the anchor on the
+  // wrong side of a weekend and lost a day.
+  const anchor =
+    link.type === 'SS'
+      ? nextWorkDay(predDates.start, calendar)
+      : nextWorkDay(addDays(predDates.end, 1), calendar)
+  return dayIndex(stepWorkDays(anchor, link.lag, calendar))
+}
+
+/**
+ * How many working-day steps separate two dates — the count of working days in
+ * (from, to]. Zero when `to` is at or before `from`.
+ *
+ * This is the unit slack has to be measured in. Measuring it in calendar days
+ * and then re-applying it as calendar days silently stretched every gap that
+ * straddled a weekend.
+ */
+function workDayOffset(fromISO, toISO, calendar) {
+  if (toISO <= fromISO) return 0
+  let count = 0
+  for (let i = dayIndex(fromISO) + 1; i <= dayIndex(toISO); i++) {
+    if (calendar.isWorkDay(fromDayIndex(i))) count++
+  }
+  return count
+}
 
 /** Duration in WORK days, honoring `end = start + workDays - 1` in work days. */
 export function itemDuration(item, calendar = WEEKDAYS_ONLY) {
@@ -87,11 +164,11 @@ export function buildGraph(items) {
   const succs = new Map(items.map((it) => [it.id, []]))
 
   for (const it of items) {
-    for (const pid of it.predecessorIds || []) {
-      if (pid === it.id) continue
-      if (!byId.has(pid)) continue
-      preds.get(it.id).push(pid)
-      succs.get(pid).push(it.id)
+    for (const link of linksOf(it)) {
+      if (link.id === it.id) continue
+      if (!byId.has(link.id)) continue
+      preds.get(it.id).push(link)
+      succs.get(link.id).push(it.id)
     }
   }
   return { byId, preds, succs }
@@ -158,14 +235,18 @@ export function detectCycle(items) {
 }
 
 /**
- * Would setting `itemId`'s predecessors to `nextPredecessorIds` close a loop?
+ * Would setting `itemId`'s predecessors to `next` close a loop?
  * Returns a naming cycle path, or null. Used at the write boundary so the DB
  * can never reach a cyclic state (the Gantt's link-drag and the agent's update
  * tool both go through this).
+ *
+ * `next` may be bare ids or full {id, type, lag} links — a cycle depends only
+ * on the edges, so the type and lag don't matter here.
  */
-export function wouldCreateCycle(items, itemId, nextPredecessorIds) {
+export function wouldCreateCycle(items, itemId, next) {
+  const links = (next || []).map((l) => (typeof l === 'string' ? { id: l, type: 'FS', lag: 0 } : l))
   const probe = items.map((it) =>
-    it.id === itemId ? { ...it, predecessorIds: [...(nextPredecessorIds || [])] } : it,
+    it.id === itemId ? { ...it, predecessors: links, predecessorIds: links.map((l) => l.id) } : it,
   )
   return detectCycle(probe)
 }
@@ -199,7 +280,13 @@ export function analyze(items, opts = {}) {
     const own = dayIndex(it.start)
     // A successor can start no earlier than the next WORKING day after its
     // predecessor finishes.
-    const gated = preds.get(id).map((pid) => dayIndex(nextWorkDay(addDays(fromDayIndex(EF.get(pid)), 1), calendar)))
+    const gated = preds.get(id).map((link) =>
+      earliestStart(
+        link,
+        { start: fromDayIndex(ES.get(link.id)), end: fromDayIndex(EF.get(link.id)) },
+        calendar,
+      ),
+    )
     const es = gated.length ? Math.max(own, ...gated) : own
     ES.set(id, es)
     EF.set(id, dayIndex(endFromWorkDays(fromDayIndex(es), itemDuration(it, calendar), calendar)))
@@ -344,37 +431,35 @@ export function cascade(items, requests = [], opts = {}) {
   for (const id of order) {
     const item = byId.get(id)
     const before = orig.get(id)
-    const predIds = preds.get(id)
-    if (!predIds.length) continue
+    const predLinks = preds.get(id)
+    if (!predLinks.length) continue
 
     if (directIds.has(id)) continue // an explicit request is never overridden
 
-    // Two different readings of "when could this start", and the mode picks one:
-    //   hard  = the bare finish-to-start constraint, gaps ignored
-    //   rigid = that PLUS the gap this item originally had, so a deliberately
-    //           sequenced chain keeps its spacing when it shifts
-    let hard = -Infinity
-    let rigid = -Infinity
-    for (const pid of predIds) {
-      const predEnd = next.get(pid).end
-      // The earliest this could legally start: the next WORKING day after the
-      // predecessor finishes.
-      const soonest = dayIndex(nextWorkDay(addDays(predEnd, 1), calendar))
-      // Lag measured in WORK days from the original schedule, so a Fri->Mon
-      // handoff reads as zero slack rather than an intentional 2-day gap.
-      const lag = workDayGap(orig.get(pid).end, before.start, calendar)
-      hard = Math.max(hard, soonest)
-      rigid = Math.max(rigid, dayIndex(addWorkDays(fromDayIndex(soonest), lag, calendar)))
+    // Where each link says this could start, before and after the moves. The
+    // difference between them is how far the constraint itself travelled; the
+    // difference between the constraint and where the item actually sits is the
+    // scheduler's own slack, over and above the link's declared lag.
+    let constraintBefore = -Infinity
+    let constraintAfter = -Infinity
+    for (const link of predLinks) {
+      constraintBefore = Math.max(constraintBefore, earliestStart(link, orig.get(link.id), calendar))
+      constraintAfter = Math.max(constraintAfter, earliestStart(link, next.get(link.id), calendar))
     }
-    if (hard === -Infinity) continue
+    if (constraintAfter === -Infinity) continue
 
     const ownStart = dayIndex(next.get(id).start)
+    // Slack the scheduler left beyond what the links demand, in WORKING days.
+    // Preserved by rigid mode so a deliberate buffer survives a shift instead
+    // of collapsing onto the constraint.
+    const slack = workDayOffset(fromDayIndex(constraintBefore), before.start, calendar)
+    const rigidTarget = dayIndex(stepWorkDays(fromDayIndex(constraintAfter), slack, calendar))
     const targetIndex =
       mode === 'float-aware'
-        // Move only once this item's own slack is genuinely used up.
-        ? Math.max(ownStart, hard)
+        // Move only once that slack is genuinely used up.
+        ? Math.max(ownStart, constraintAfter)
         // Forward-only: a predecessor moving earlier never drags this back.
-        : Math.max(rigid, dayIndex(before.start))
+        : Math.max(rigidTarget, dayIndex(before.start))
 
     if (targetIndex <= ownStart) continue
 

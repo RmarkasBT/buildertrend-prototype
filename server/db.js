@@ -157,6 +157,68 @@ try {
   if (!String(err.message).includes('duplicate column name')) throw err
 }
 
+// Typed links with lag, replacing the bare id list. Buildertrend supports two
+// predecessor types (Finish-To-Start and Start-To-Start) and a per-link lag in
+// days that may be negative for lead time — see its Schedule Overview help
+// article. `predecessors` is now the source of truth; `predecessor_ids` is kept
+// only so it can be DERIVED for the wire shape, since an agent or screen that
+// just wants "what does this wait on" shouldn't have to understand link types.
+try {
+  db.exec(`ALTER TABLE schedule_items ADD COLUMN predecessors TEXT NOT NULL DEFAULT '[]'`)
+} catch (err) {
+  if (!String(err.message).includes('duplicate column name')) throw err
+}
+
+// Backfill: any row with ids but no links gets FS/lag-0 links, which is exactly
+// what the bare list meant. Runs once; afterwards the two agree by construction
+// because every write goes through itemToRow below.
+{
+  const stale = db
+    .prepare(`SELECT id, predecessor_ids FROM schedule_items WHERE predecessors = '[]' AND predecessor_ids != '[]'`)
+    .all()
+  const setLinks = db.prepare(`UPDATE schedule_items SET predecessors = ? WHERE id = ?`)
+  for (const row of stale) {
+    const ids = JSON.parse(row.predecessor_ids || '[]')
+    setLinks.run(JSON.stringify(ids.map((id) => ({ id, type: 'FS', lag: 0 }))), row.id)
+  }
+}
+
+/**
+ * Coerce stored predecessor data into typed links.
+ *
+ * Falls back to the bare id column when `predecessors` is empty, so a row that
+ * predates the migration still reads correctly, and defaults a missing type or
+ * lag rather than trusting whatever was written.
+ *
+ * rowToItem exposes both `predecessors` (canonical) and `predecessorIds`, with
+ * the latter DERIVED from this function's output rather than read from its own
+ * column — so the two shapes cannot drift apart no matter what wrote the row.
+ */
+function normalizeLinks(linksJson, idsJson) {
+  let links = []
+  try {
+    links = JSON.parse(linksJson || '[]')
+  } catch {
+    links = []
+  }
+  if (!Array.isArray(links) || !links.length) {
+    let ids = []
+    try {
+      ids = JSON.parse(idsJson || '[]')
+    } catch {
+      ids = []
+    }
+    return (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string').map((id) => ({ id, type: 'FS', lag: 0 }))
+  }
+  return links
+    .filter((l) => l && typeof l.id === 'string')
+    .map((l) => ({
+      id: l.id,
+      type: l.type === 'SS' ? 'SS' : 'FS',
+      lag: Number.isFinite(Number(l.lag)) ? Math.trunc(Number(l.lag)) : 0,
+    }))
+}
+
 // DB row (snake_case, 0/1 booleans, JSON-text arrays) <-> frontend item
 // shape (camelCase, real booleans/arrays) — matches src/data/schedule.js's
 // item() fields exactly, so the JSON the frontend sees is unchanged.
@@ -180,12 +242,27 @@ export function rowToItem(row) {
     showOnGantt: Boolean(row.show_on_gantt),
     showClient: Boolean(row.show_client),
     subIds: JSON.parse(row.sub_ids),
-    predecessorIds: JSON.parse(row.predecessor_ids ?? '[]'),
+    predecessors: normalizeLinks(row.predecessors, row.predecessor_ids),
+    predecessorIds: normalizeLinks(row.predecessors, row.predecessor_ids).map((l) => l.id),
     notes: row.notes,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+/** The links to persist for an item, from whichever field the caller supplied. */
+function linksFor(item) {
+  if (Array.isArray(item.predecessors)) {
+    return item.predecessors
+      .filter((l) => l && typeof l.id === 'string')
+      .map((l) => ({
+        id: l.id,
+        type: l.type === 'SS' ? 'SS' : 'FS',
+        lag: Number.isFinite(Number(l.lag)) ? Math.trunc(Number(l.lag)) : 0,
+      }))
+  }
+  return (item.predecessorIds ?? []).filter((id) => typeof id === 'string').map((id) => ({ id, type: 'FS', lag: 0 }))
 }
 
 export function itemToRow(item) {
@@ -206,7 +283,12 @@ export function itemToRow(item) {
     show_on_gantt: item.showOnGantt ?? true ? 1 : 0,
     show_client: item.showClient ?? true ? 1 : 0,
     sub_ids: JSON.stringify(item.subIds ?? []),
-    predecessor_ids: JSON.stringify(item.predecessorIds ?? []),
+    // `predecessors` wins when present; a caller that sent only the bare id
+    // list (an older client, or an agent that doesn't care about link types)
+    // gets FS/lag-0, which is what that list has always meant. predecessor_ids
+    // is written from the same source so the derived read can never disagree.
+    predecessors: JSON.stringify(linksFor(item)),
+    predecessor_ids: JSON.stringify(linksFor(item).map((l) => l.id)),
     notes: item.notes ?? '',
   }
 }

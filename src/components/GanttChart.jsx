@@ -16,7 +16,7 @@ import {
 // CPM lives in the cascade engine so the Critical Path toggle and the impact
 // cascade can never disagree about which items are critical — they were
 // separate implementations of the same forward/backward pass before.
-import { computeCriticalIds, itemDuration, wouldCreateCycle } from '../lib/cascade'
+import { computeCriticalIds, itemDuration, wouldCreateCycle, linksOf } from '../lib/cascade'
 import { IconSliders, IconShare, IconExpand, IconChevronDown, IconCheck, IconXCircle, IconEdit, IconCirclePlus } from './icons'
 
 // Real Buildertrend Gantt (/app/Schedules/{id}, Gantt tab) captured live:
@@ -488,16 +488,24 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
               {rows.map((row) => row.type === 'item' ? row.item : null).filter(Boolean).flatMap((item) => {
                 const succIdx = rowIndexById.get(item.id)
                 if (succIdx === undefined) return []
-                return (item.predecessorIds || []).map((pid) => {
+                return linksOf(item).map((link) => {
+                  const pid = link.id
                   const predIdx = rowIndexById.get(pid)
                   const pred = byId.get(pid)
                   if (predIdx === undefined || !pred) return null
                   const critical = criticalIds.has(pid) && criticalIds.has(item.id)
-                  const x1 = xOf(pred.end) + dayWidth
+                  // An SS link leaves the predecessor's START, not its finish —
+                  // drawing it from the end would show a finish-to-start
+                  // relationship that isn't what the schedule actually says.
+                  const ss = link.type === 'SS'
+                  const x1 = ss ? xOf(pred.start) : xOf(pred.end) + dayWidth
                   const y1 = predIdx * ROW_H + ROW_H / 2
                   const x2 = xOf(item.start)
                   const y2 = succIdx * ROW_H + ROW_H / 2
-                  const midX = x1 + 8
+                  // SS routes below/left via a short stub so a same-start pair
+                  // (identical x1 and x2) still renders as a visible connector
+                  // rather than collapsing to a zero-length line.
+                  const midX = ss ? Math.min(x1, x2) - 8 : x1 + 8
                   const d = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`
                   return (
                     <g key={`${pid}-${item.id}`} className="pointer-events-auto">
@@ -517,6 +525,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
                         fill="none"
                         stroke={critical ? '#0763fb' : '#8f9ba8'}
                         strokeWidth={critical ? 2 : 1.5}
+                        strokeDasharray={ss ? '4 3' : undefined}
                         markerEnd="url(#arrow)"
                         className="pointer-events-none"
                       />

@@ -173,6 +173,13 @@ export function nextWorkDay(iso, calendar = WEEKDAYS_ONLY) {
   return cur
 }
 
+/** The last working day at or before `iso`. */
+export function prevWorkDay(iso, calendar = WEEKDAYS_ONLY) {
+  let cur = iso
+  for (let guard = 0; guard < 400 && !calendar.isWorkDay(cur); guard++) cur = addDays(cur, -1)
+  return cur
+}
+
 /**
  * Advance `n` working days forward from `iso`, landing on a working day.
  * n = 0 returns the first working day at or after `iso`.
@@ -182,6 +189,26 @@ export function addWorkDays(iso, n, calendar = WEEKDAYS_ONLY) {
   let remaining = Math.max(0, n)
   while (remaining > 0) {
     cur = addDays(cur, 1)
+    if (calendar.isWorkDay(cur)) remaining--
+  }
+  return cur
+}
+
+/**
+ * Step `n` working days from `iso` in either direction, landing on a working
+ * day. n = 0 snaps to the nearest working day (forward, or backward for a
+ * negative caller).
+ *
+ * The signed version exists for LEAD time: a dependency with a negative lag
+ * lets a successor start before its predecessor finishes ("start painting a
+ * day before the drywall is done"), which needs to walk the calendar backwards.
+ */
+export function stepWorkDays(iso, n, calendar = WEEKDAYS_ONLY) {
+  const forward = n >= 0
+  let cur = forward ? nextWorkDay(iso, calendar) : prevWorkDay(iso, calendar)
+  let remaining = Math.abs(n)
+  while (remaining > 0) {
+    cur = addDays(cur, forward ? 1 : -1)
     if (calendar.isWorkDay(cur)) remaining--
   }
   return cur
