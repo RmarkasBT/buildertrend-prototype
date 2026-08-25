@@ -71,6 +71,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
   const [dragPreview, setDragPreview] = useState(null)
   const [linkDraft, setLinkDraft] = useState(null)
   const [linkError, setLinkError] = useState(null)
+  const [linkToRemove, setLinkToRemove] = useState(null)
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
   const rowRefs = useRef(new Map())
@@ -294,8 +295,40 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     return m
   }, [rows])
 
+  const removeLink = () => {
+    const succ = byId.get(linkToRemove.succId)
+    if (succ) {
+      onUpdateItem({
+        ...succ,
+        predecessorIds: (succ.predecessorIds || []).filter((p) => p !== linkToRemove.predId),
+      })
+    }
+    setLinkToRemove(null)
+  }
+
   return (
     <div ref={containerRef} className="rounded-md border border-gray-15 bg-white">
+      {/* Refusing a circular link, and confirming a link removal. Both belong
+          here rather than as toasts: the user is looking at the two bars they
+          just tried to connect. */}
+      {linkError && (
+        <div className="flex items-start justify-between gap-3 border-b border-gray-15 bg-danger-bg px-3 py-2 text-sm text-danger-fg">
+          <span>{linkError}</span>
+          <button onClick={() => setLinkError(null)} className="shrink-0 font-semibold underline">Dismiss</button>
+        </div>
+      )}
+      {linkToRemove && (
+        <div className="flex items-center justify-between gap-3 border-b border-gray-15 bg-warning-bg px-3 py-2 text-sm text-warning-fg">
+          <span>
+            Remove the link so {byId.get(linkToRemove.succId)?.title ?? 'this item'} no longer waits on{' '}
+            {byId.get(linkToRemove.predId)?.title ?? 'that item'}?
+          </span>
+          <span className="flex shrink-0 gap-3">
+            <button onClick={removeLink} className="font-semibold text-brand-blue underline">Remove link</button>
+            <button onClick={() => setLinkToRemove(null)} className="text-gray-70 underline">Cancel</button>
+          </span>
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-gray-15 px-3 py-2">
         <div className="flex items-center gap-2">
           <select
@@ -467,14 +500,27 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
                   const midX = x1 + 8
                   const d = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`
                   return (
-                    <path
-                      key={`${pid}-${item.id}`}
-                      d={d}
-                      fill="none"
-                      stroke={critical ? '#b5254c' : '#8f9ba8'}
-                      strokeWidth={critical ? 2 : 1.5}
-                      markerEnd="url(#arrow)"
-                    />
+                    <g key={`${pid}-${item.id}`} className="pointer-events-auto">
+                      {/* Invisible fat stroke under the visible line: a 1.5px
+                          path is far too thin to click reliably. Matches BT,
+                          where clicking a link is how you remove it. */}
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth={12}
+                        className="cursor-pointer"
+                        onClick={() => setLinkToRemove({ predId: pid, succId: item.id })}
+                      />
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke={critical ? '#0763fb' : '#8f9ba8'}
+                        strokeWidth={critical ? 2 : 1.5}
+                        markerEnd="url(#arrow)"
+                        className="pointer-events-none"
+                      />
+                    </g>
                   )
                 })
               })}
@@ -516,6 +562,14 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
               const fitsInside = width > label.length * 6 + 16
               const selected = selectedId === item.id
               const critical = criticalIds.has(item.id)
+              // Per Buildertrend's own docs, the Critical Path toggle outlines
+              // critical items in BLUE and greys out everything else ("Tasks
+              // shown in grey indicate schedule items that are not on the
+              // critical path. These tasks have some built-in flexibility or
+              // 'float'"). Greying the non-critical bars is the half that makes
+              // the toggle readable — outlining alone leaves every bar its
+              // normal colour and the eye can't separate them.
+              const dimmed = showCritical && !critical
               return (
                 <div key={item.id} data-row-id={item.id} className="relative border-b border-gray-15" style={{ height: ROW_H }}>
                   <div
@@ -525,8 +579,8 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
                       left,
                       width,
                       height: ROW_H - 12,
-                      backgroundColor: colorHex(item.color),
-                      outline: critical ? '2px solid #b5254c' : selected ? '2px solid #0763fb' : 'none',
+                      backgroundColor: dimmed ? '#b8bfcc' : colorHex(item.color),
+                      outline: critical ? '2px solid #0763fb' : selected ? '2px solid #0763fb' : 'none',
                       outlineOffset: 1,
                     }}
                   >
