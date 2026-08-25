@@ -126,6 +126,32 @@ dark navy, phase bars in amber/orange, "+N more" overflow).
   reasonable inventions for those two, not observed screens.
 - **Gap:** Baseline and Workday Exceptions tab contents were not opened.
 
+> **UNRESOLVED — this entry and `src/components/GanttChart.jsx` disagree, and
+> only a human who was there can settle it.**
+>
+> The gap above says the Gantt tab was never opened. `GanttChart.jsx`'s header
+> comment says the opposite — that the Gantt tab *was* captured live, and names
+> specifics (zoom dropdown Day/Week/Month/Year, Today button, Phases and
+> Critical Path toggles, a pinned left grid of Title/Start/Workdays with
+> per-row pencil and "+" icons, weekend shading, a today marker, phase group
+> summary bars, click-a-bar inline editing, and `dhtmlx-gantt` inferred from
+> `gantt_*` class names).
+>
+> That specificity is hard to invent, and the header is careful about what it
+> did *not* observe (drag-to-move/resize and dependency links, since no job had
+> links configured) — which suggests this entry is simply stale, written when
+> only the Calendar had been opened and never updated afterwards. But that is
+> an inference, not a record.
+>
+> It matters because it decides whether the current Gantt is a replica or an
+> original, and therefore whether "does it match Buildertrend?" is even a
+> answerable question from inside this repo. Until someone confirms which is
+> true, treat the Gantt's fidelity to the real product as UNKNOWN rather than
+> assuming either.
+>
+> Subsequent sessions have not resolved it: reaching `/app/Schedules/6`
+> requires a Buildertrend login, so the live page has not been re-observed.
+
 ## Daily Logs (`/app/DailyLogs`)
 
 Observed **both** empty and populated states directly:
