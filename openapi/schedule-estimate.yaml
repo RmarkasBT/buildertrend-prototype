@@ -1259,6 +1259,18 @@ components:
             treated as finish-to-start with zero lag.
         notes:
           type: string
+          description: |
+            "All Notes" — visible to the internal team, subs/vendors AND clients.
+            The widest audience, so don't put anything internal here.
+        internalNotes:
+          type: string
+          description: '"Internal Notes" — internal team only. Never shown to subs or clients.'
+        subNotes:
+          type: string
+          description: '"Sub Notes" — internal team and subs/vendors. Not clients.'
+        clientNotes:
+          type: string
+          description: '"Client Notes" — internal team and clients. Not subs.'
         createdBy:
           type: string
           description: Always a fixed server-set demo user name, regardless of request input. Read-only.
@@ -1270,7 +1282,7 @@ components:
           type: string
           format: date-time
           description: ISO 8601 timestamp, refreshed on every update. Read-only.
-      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, predecessors, predecessorIds, notes, createdBy, createdAt, updatedAt]
+      required: [id, jobId, title, color, assignees, start, end, workDays, hourly, progress, reminder, complete, phase, tags, showOnGantt, showClient, subIds, predecessors, predecessorIds, notes, internalNotes, subNotes, clientNotes, createdBy, createdAt, updatedAt]
 
     ScheduleItemInput:
       type: object
@@ -1358,6 +1370,21 @@ components:
         notes:
           type: string
           default: ''
+          description: |
+            "All Notes" — the internal team, subs/vendors AND clients can read
+            this. Use one of the narrower fields below if the audience matters.
+        internalNotes:
+          type: string
+          default: ''
+          description: '"Internal Notes" — internal team only.'
+        subNotes:
+          type: string
+          default: ''
+          description: '"Sub Notes" — internal team and subs/vendors, not clients.'
+        clientNotes:
+          type: string
+          default: ''
+          description: '"Client Notes" — internal team and clients, not subs.'
       required: [jobId, title, start, end]
 
     CascadePreviewInput:

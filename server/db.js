@@ -285,6 +285,22 @@ function normalizeLinks(linksJson, idsJson) {
     }))
 }
 
+// Notes by audience. BT splits a schedule item's notes into four visibility
+// levels rather than one field:
+//   notes          "All Notes"      internal team, subs/vendors AND clients
+//   internalNotes  "Internal Notes" internal team only
+//   subNotes       "Sub Notes"      internal team and subs/vendors
+//   clientNotes    "Client Notes"   internal team and clients
+// The existing `notes` column keeps its meaning as All Notes, so nothing that
+// already wrote notes changes behaviour; the three narrower ones are additive.
+for (const col of ['internal_notes', 'sub_notes', 'client_notes']) {
+  try {
+    db.exec(`ALTER TABLE schedule_items ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`)
+  } catch (err) {
+    if (!String(err.message).includes('duplicate column name')) throw err
+  }
+}
+
 // DB row (snake_case, 0/1 booleans, JSON-text arrays) <-> frontend item
 // shape (camelCase, real booleans/arrays) — matches src/data/schedule.js's
 // item() fields exactly, so the JSON the frontend sees is unchanged.
@@ -311,6 +327,9 @@ export function rowToItem(row) {
     predecessors: normalizeLinks(row.predecessors, row.predecessor_ids),
     predecessorIds: normalizeLinks(row.predecessors, row.predecessor_ids).map((l) => l.id),
     notes: row.notes,
+    internalNotes: row.internal_notes ?? '',
+    subNotes: row.sub_notes ?? '',
+    clientNotes: row.client_notes ?? '',
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -356,6 +375,9 @@ export function itemToRow(item) {
     predecessors: JSON.stringify(linksFor(item)),
     predecessor_ids: JSON.stringify(linksFor(item).map((l) => l.id)),
     notes: item.notes ?? '',
+    internal_notes: item.internalNotes ?? '',
+    sub_notes: item.subNotes ?? '',
+    client_notes: item.clientNotes ?? '',
   }
 }
 

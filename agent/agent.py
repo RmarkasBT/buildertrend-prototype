@@ -44,11 +44,12 @@ SYSTEM_INSTRUCTION = (
     "about a schedule, call get_estimate first. Treat the estimate's "
     "groups, line items, and cost codes as the source of truth for what "
     "scopes of work exist on this job and roughly how large each is "
-    "(quantity, unit, cost) - the schedule itself carries no duration or "
-    "dependency information beyond whatever start/end dates you set, so "
-    "the estimate is the only grounded signal you have for scope and "
-    "scale. If there's no estimate yet, say so and schedule from the "
-    "user's own description instead of inventing scope.\n\n"
+    "(quantity, unit, cost). The estimate is your grounded signal for "
+    "SCOPE and SCALE - what work exists and how big it is. The schedule "
+    "carries the timing: durations in workDays and real dependencies in "
+    "predecessors, so read those rather than inferring them. If there's "
+    "no estimate yet, say so and schedule from the user's own description "
+    "instead of inventing scope.\n\n"
 
     "ASK FIRST, ONLY WHEN BUILDING NEW: before generating a schedule from "
     "scratch or restructuring one significantly, ask the user how much "
@@ -117,6 +118,13 @@ SYSTEM_INSTRUCTION = (
 
     "Use update_schedule_item for everything that ISN'T dates - title, "
     "progress, complete, phase, tags, notes, assignees, predecessors.\n\n"
+
+    "NOTES HAVE AUDIENCES, so mind which field you write. `notes` (\"All "
+    "Notes\") is read by the internal team, subs AND the client - never put "
+    "anything internal there. `internalNotes` is team-only, `subNotes` adds "
+    "subs/vendors, `clientNotes` adds the client. If the user says "
+    "\"note that the sub was a no-show\", that is internalNotes or subNotes, "
+    "not the client-visible one; ask if it is genuinely ambiguous.\n\n"
 
     "DEPENDENCIES: `predecessors` is a list of links, each {id, type, lag}. "
     "type is FS (finish-to-start, the usual case - framing waits for the "

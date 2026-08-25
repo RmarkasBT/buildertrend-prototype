@@ -7,6 +7,15 @@ import { wouldCreateCycle } from '../lib/cascade'
 import * as scheduleApi from '../api/scheduleApi'
 import { fmtDateShort } from '../lib/dates'
 
+// BT splits schedule-item notes by audience rather than offering one field.
+// The widest one is stored in `notes`, which is what it always meant.
+const NOTE_FIELDS = [
+  { key: 'notes', label: 'All Notes', hint: 'internal team, subs/vendors and clients' },
+  { key: 'internalNotes', label: 'Internal Notes', hint: 'internal team only' },
+  { key: 'subNotes', label: 'Sub Notes', hint: 'internal team and subs/vendors' },
+  { key: 'clientNotes', label: 'Client Notes', hint: 'internal team and clients' },
+]
+
 const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Shifts', 'Notes']
 
 // Layout (Complete toggle, Title/Display Color, Assignees, Start Date/Work
@@ -41,6 +50,9 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
     predecessors:
       item?.predecessors ?? (item?.predecessorIds ?? []).map((id) => ({ id, type: 'FS', lag: 0 })),
     notes: item?.notes ?? '',
+    internalNotes: item?.internalNotes ?? '',
+    subNotes: item?.subNotes ?? '',
+    clientNotes: item?.clientNotes ?? '',
   }))
   const [tab, setTab] = useState('Predecessors & Links')
   const [tagInput, setTagInput] = useState('')
@@ -502,14 +514,23 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
           )}
 
           {tab === 'Notes' && (
-            <div className="mt-3">
-              <textarea
-                value={form.notes}
-                onChange={(e) => setField('notes', e.target.value)}
-                rows={4}
-                className="w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
-                placeholder="Add a note…"
-              />
+            <div className="mt-3 space-y-3">
+              <div className="text-xs text-gray-50">
+                Notes are split by who can see them. Only users with access to this job and
+                permission to view the Schedule see any of them.
+              </div>
+              {NOTE_FIELDS.map(({ key, label, hint }) => (
+                <label key={key} className="block">
+                  <span className="text-xs font-semibold text-gray-70">{label}</span>
+                  <span className="ml-2 text-xs text-gray-50">{hint}</span>
+                  <textarea
+                    value={form[key]}
+                    onChange={(e) => setField(key, e.target.value)}
+                    rows={key === 'notes' ? 3 : 2}
+                    className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+                  />
+                </label>
+              ))}
             </div>
           )}
         </>

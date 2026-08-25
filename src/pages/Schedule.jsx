@@ -10,6 +10,8 @@ import WorkdayExceptions from '../components/WorkdayExceptions'
 import BaselineView from '../components/BaselineView'
 import * as workdayApi from '../api/workdayApi'
 import { buildWorkCalendar } from '../lib/workCalendar'
+import { findConflicts } from '../lib/conflicts'
+import { subsVendors } from '../data/subsVendors'
 
 // Tabs (Schedule/Baseline/Workday Exceptions), view toggle (Calendar/List/
 // Gantt), toolbar (gear/undo/Schedule Offline/More Actions/Filter/New
@@ -93,6 +95,16 @@ export default function Schedule() {
     }
     return out
   }, [items, listPhases])
+
+  // Double-bookings: the same sub or assignee on overlapping work. BT surfaces
+  // these as alerts with a per-contact tolerance; one overlap is the default.
+  const conflicts = useMemo(
+    () => findConflicts(items, {
+      today: toISODate(new Date()),
+      names: Object.fromEntries(subsVendors.map((s) => [s.id, s.name])),
+    }),
+    [items],
+  )
 
   const itemsForDay = (day) => {
     const iso = toISODate(day)
@@ -195,6 +207,25 @@ export default function Schedule() {
           {error && (
             <div className="mt-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
               Couldn't load the schedule: {error}
+            </div>
+          )}
+
+          {conflicts.length > 0 && (
+            <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
+              <div className="font-semibold">
+                {conflicts.length} schedule conflict{conflicts.length === 1 ? '' : 's'}
+              </div>
+              <ul className="mt-1 space-y-0.5">
+                {conflicts.slice(0, 4).map((c, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{c.resourceName}</span> is booked on{' '}
+                    {c.items[0].title} and {c.items[1].title} — both running{' '}
+                    {fmtDateShort(c.overlapStart)}
+                    {c.overlapStart !== c.overlapEnd && `–${fmtDateShort(c.overlapEnd)}`}
+                  </li>
+                ))}
+                {conflicts.length > 4 && <li>and {conflicts.length - 4} more</li>}
+              </ul>
             </div>
           )}
 
