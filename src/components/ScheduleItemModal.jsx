@@ -3,6 +3,7 @@ import Modal from './Modal'
 import { scheduleColors, reminderOptions, phaseOptions } from '../data/scheduleColors'
 import { subsVendors } from '../data/subsVendors'
 import { endFromWorkDays, workDaysBetween, todayIso } from '../lib/dates'
+import { wouldCreateCycle } from '../lib/cascade'
 
 const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Notes']
 
@@ -10,9 +11,11 @@ const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Notes']
 // Days/End Date, Hourly, Progress, Reminder, Phases & Tags / Viewing /
 // Notes tabs, Created by/on footer, "..." Copy/Delete menu) copied from the
 // real Schedule Item create + edit modals at /app/Schedules. Predecessors &
-// Links, Files, Shifts, RFIs, and Related Items were observed but are not
-// implemented here (flagged in CAPTURE_LOG.md) — Notes is simplified to a
-// single field instead of the real All/Internal/Sub/Client split.
+// Links is implemented: typed links (Finish-to-Start / Start-to-Start) with a
+// lag in working days that may be negative for lead time, matching what
+// Buildertrend documents. Files, Shifts, RFIs and Related Items were observed
+// but are not implemented (flagged in CAPTURE_LOG.md), and Notes is simplified
+// to a single field instead of the real All/Internal/Sub/Client split.
 export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, onDelete, onCopy, onClose }) {
   const isEditing = Boolean(item?.id)
   const [form, setForm] = useState(() => ({
@@ -31,7 +34,10 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
     showOnGantt: item?.showOnGantt ?? true,
     showClient: item?.showClient ?? true,
     subIds: item?.subIds ?? [],
-    predecessorIds: item?.predecessorIds ?? [],
+    // Typed links are canonical. An item that only carries the older bare id
+    // list reads as finish-to-start with no lag, which is what that list meant.
+    predecessors:
+      item?.predecessors ?? (item?.predecessorIds ?? []).map((id) => ({ id, type: 'FS', lag: 0 })),
     notes: item?.notes ?? '',
   }))
   const [tab, setTab] = useState('Predecessors & Links')
@@ -39,6 +45,7 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
   const [showRequired, setShowRequired] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [linkWarning, setLinkWarning] = useState(null)
 
   const setField = (key, value) => setForm((f) => ({ ...f, [key]: value }))
 
@@ -60,6 +67,49 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
   }
 
   const availableSubs = subsVendors.filter((s) => (jobSubIds || []).includes(s.id))
+
+  // --- Predecessors & Links -------------------------------------------------
+  const linkable = (allItems || []).filter((i) => i.id !== item?.id)
+  const byId = new Map((allItems || []).map((i) => [i.id, i]))
+
+  const addLink = (id) => {
+    // Check before adding rather than after saving: the server rejects a cycle
+    // too, but only here can the loop be named in the user's own task titles.
+    const next = [...form.predecessors, { id, type: 'FS', lag: 0 }]
+    const loop = item?.id ? wouldCreateCycle(allItems || [], item.id, next) : null
+    if (loop) {
+      const titles = loop.map((lid) => byId.get(lid)?.title ?? lid)
+      setLinkWarning(`That would make the schedule circular: ${titles.join(' → ')}`)
+      return
+    }
+    setLinkWarning(null)
+    setField('predecessors', next)
+  }
+
+  const setLink = (id, patch) => {
+    setLinkWarning(null)
+    setField('predecessors', form.predecessors.map((l) => (l.id === id ? { ...l, ...patch } : l)))
+  }
+
+  const removeLink = (id) => {
+    setLinkWarning(null)
+    setField('predecessors', form.predecessors.filter((l) => l.id !== id))
+  }
+
+  // Plain-English echo of what the link actually means, so a lag of -1 isn't
+  // something the user has to decode.
+  const describeLink = (link, pred) => {
+    const name = pred?.title ? `"${pred.title}"` : 'it'
+    const days = Math.abs(link.lag) === 1 ? 'day' : 'days'
+    if (link.type === 'SS') {
+      if (link.lag === 0) return `Starts the same day ${name} starts`
+      if (link.lag > 0) return `Starts ${link.lag} work ${days} after ${name} starts`
+      return `Starts ${Math.abs(link.lag)} work ${days} before ${name} starts`
+    }
+    if (link.lag === 0) return `Starts the next work day after ${name} finishes`
+    if (link.lag > 0) return `Waits ${link.lag} work ${days} after ${name} finishes`
+    return `Starts ${Math.abs(link.lag)} work ${days} before ${name} finishes`
+  }
 
   const handleSave = () => {
     if (!form.title.trim()) {
@@ -229,34 +279,93 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
           </div>
 
           {tab === 'Predecessors & Links' && (
-            <div className="mt-3 space-y-2">
-              <div className="text-sm font-semibold text-gray-90">Predecessors</div>
-              <div className="text-xs text-gray-50">
-                Finish-to-start: this item won't be able to start before the checked items finish. Drives the Gantt view's dependency arrows and Critical Path highlighting.
+            <div className="mt-3 space-y-3">
+              <div>
+                <div className="text-sm font-semibold text-gray-90">Predecessors</div>
+                <div className="mt-1 text-xs text-gray-50">
+                  What this item waits on. Drives the Gantt's dependency arrows, the Critical
+                  Path, and the dates of everything downstream.
+                </div>
               </div>
-              {(allItems || []).filter((i) => i.id !== item?.id).length === 0 ? (
+
+              {linkable.length === 0 ? (
                 <div className="text-sm text-gray-50">No other schedule items on this job yet.</div>
               ) : (
-                <div className="max-h-48 space-y-1 overflow-y-auto">
-                  {(allItems || []).filter((i) => i.id !== item?.id).map((i) => {
-                    const checked = form.predecessorIds.includes(i.id)
-                    return (
-                      <label key={i.id} className="flex items-center gap-2 rounded-sm px-1 py-1 text-sm text-gray-80 hover:bg-gray-5">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => setField(
-                            'predecessorIds',
-                            checked ? form.predecessorIds.filter((id) => id !== i.id) : [...form.predecessorIds, i.id],
-                          )}
-                        />
-                        <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: scheduleColors.find((c) => c.name === i.color)?.hex }} />
-                        <span className="truncate">{i.title}</span>
-                        <span className="ml-auto shrink-0 text-xs text-gray-40">{i.start}</span>
-                      </label>
-                    )
-                  })}
-                </div>
+                <>
+                  {form.predecessors.length > 0 && (
+                    <div className="space-y-2">
+                      {form.predecessors.map((link) => {
+                        const pred = byId.get(link.id)
+                        return (
+                          <div key={link.id} className="rounded-sm border border-gray-15 bg-gray-5 p-2">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: scheduleColors.find((c) => c.name === pred?.color)?.hex }}
+                              />
+                              <span className="truncate text-sm text-gray-90">{pred?.title ?? link.id}</span>
+                              <button
+                                onClick={() => removeLink(link.id)}
+                                aria-label={`Remove ${pred?.title ?? link.id}`}
+                                className="ml-auto shrink-0 text-xs text-gray-50 underline hover:text-danger-fg"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-end gap-3">
+                              <label className="text-xs font-medium text-gray-60">
+                                Type
+                                <select
+                                  value={link.type}
+                                  onChange={(e) => setLink(link.id, { type: e.target.value })}
+                                  className="mt-1 block rounded-sm border border-gray-20 bg-white px-2 py-1 text-sm text-gray-90"
+                                >
+                                  <option value="FS">Finish-to-Start</option>
+                                  <option value="SS">Start-to-Start</option>
+                                </select>
+                              </label>
+                              <label className="text-xs font-medium text-gray-60">
+                                Lag (work days)
+                                <input
+                                  type="number"
+                                  value={link.lag}
+                                  onChange={(e) => setLink(link.id, { lag: Math.trunc(Number(e.target.value) || 0) })}
+                                  className="mt-1 block w-24 rounded-sm border border-gray-20 px-2 py-1 text-sm text-gray-90"
+                                />
+                              </label>
+                              <div className="pb-1 text-xs text-gray-50">{describeLink(link, pred)}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  <label className="block text-xs font-medium text-gray-60">
+                    Add a predecessor
+                    <select
+                      value=""
+                      onChange={(e) => e.target.value && addLink(e.target.value)}
+                      className="mt-1 block w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm text-gray-90"
+                    >
+                      <option value="">Select an item…</option>
+                      {linkable
+                        .filter((i) => !form.predecessors.some((l) => l.id === i.id))
+                        .map((i) => (
+                          <option key={i.id} value={i.id}>{i.title} ({i.start})</option>
+                        ))}
+                    </select>
+                  </label>
+
+                  {linkWarning && (
+                    <div className="rounded-sm bg-danger-bg px-2 py-1.5 text-xs text-danger-fg">{linkWarning}</div>
+                  )}
+
+                  <div className="text-xs text-gray-50">
+                    Lag waits that many working days after the predecessor (2 for concrete to
+                    cure). A negative lag is lead time — start before it finishes.
+                  </div>
+                </>
               )}
             </div>
           )}
