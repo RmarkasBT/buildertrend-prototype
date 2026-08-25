@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Modal from './Modal'
 import { scheduleColors, reminderOptions, phaseOptions } from '../data/scheduleColors'
 import { subsVendors } from '../data/subsVendors'
 import { endFromWorkDays, workDaysBetween, todayIso } from '../lib/dates'
 import { wouldCreateCycle } from '../lib/cascade'
+import * as scheduleApi from '../api/scheduleApi'
+import { fmtDateShort } from '../lib/dates'
 
-const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Notes']
+const TABS = ['Predecessors & Links', 'Phases & Tags', 'Viewing', 'Shifts', 'Notes']
 
 // Layout (Complete toggle, Title/Display Color, Assignees, Start Date/Work
 // Days/End Date, Hourly, Progress, Reminder, Phases & Tags / Viewing /
@@ -46,6 +48,14 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [linkWarning, setLinkWarning] = useState(null)
+  const [shifts, setShifts] = useState(null)
+
+  // Loaded on demand: most opens of this modal never look at Shifts, and the
+  // history grows for the life of the job.
+  useEffect(() => {
+    if (tab !== 'Shifts' || !item?.id || shifts !== null) return
+    scheduleApi.listShifts(item.id).then(setShifts).catch(() => setShifts([]))
+  }, [tab, item?.id, shifts])
 
   const setField = (key, value) => setForm((f) => ({ ...f, [key]: value }))
 
@@ -442,6 +452,52 @@ export default function ScheduleItemModal({ item, jobSubIds, allItems, onSave, o
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {tab === 'Shifts' && (
+            <div className="mt-3">
+              <div className="text-sm font-semibold text-gray-90">Shifts</div>
+              <div className="mt-1 text-xs text-gray-50">
+                Every recorded change to this item's dates, and why. A shift marked "followed"
+                moved because something it depends on moved — not because anyone edited it.
+              </div>
+              {!isEditing ? (
+                <div className="mt-3 text-sm text-gray-50">Save the item first — there's no history yet.</div>
+              ) : shifts === null ? (
+                <div className="mt-3 text-sm text-gray-50">Loading shifts…</div>
+              ) : shifts.length === 0 ? (
+                <div className="mt-3 rounded-sm border border-gray-15 px-3 py-4 text-center text-sm text-gray-50">
+                  This item hasn't moved since it was created.
+                </div>
+              ) : (
+                <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                  {shifts.map((sh) => (
+                    <div key={`${sh.changeSetId}`} className="rounded-sm border border-gray-15 px-2 py-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="tabular-nums text-gray-90">
+                          {fmtDateShort(sh.from.start)} → {fmtDateShort(sh.to.start)}
+                        </span>
+                        <span
+                          className={`rounded-sm px-1.5 py-0.5 text-xs font-semibold ${
+                            sh.role === 'direct' ? 'bg-info-bg text-brand-blue' : 'bg-gray-10 text-gray-60'
+                          }`}
+                        >
+                          {sh.role === 'direct' ? 'Moved' : 'Followed'}
+                        </span>
+                        {sh.undone && (
+                          <span className="rounded-sm bg-gray-10 px-1.5 py-0.5 text-xs text-gray-50">Undone</span>
+                        )}
+                      </div>
+                      {sh.reason && <div className="mt-1 text-sm text-gray-80">{sh.reason}</div>}
+                      <div className="mt-1 text-xs text-gray-50">
+                        {sh.createdBy} · {new Date(sh.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                        {sh.alsoMoved > 0 && ` · ${sh.alsoMoved} other item${sh.alsoMoved === 1 ? '' : 's'} moved with it`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

@@ -213,3 +213,45 @@ export function undoChangeSet(id, { force = false } = {}) {
 }
 
 export { rowToItem }
+
+/**
+ * Every recorded date change for ONE item, newest first — the Shifts tab.
+ *
+ * Derived from change sets rather than stored separately: a change set already
+ * IS a shift record (who, when, why, and what moved), so a parallel shifts
+ * table would be the same facts written twice and free to disagree. BT surfaces
+ * the same thing per item, alongside the Shift Reason logged at the time.
+ */
+export function listShiftsForItem(itemId) {
+  const rows = db
+    .prepare(
+      `SELECT ci.*, cs.id AS set_id, cs.origin, cs.reason, cs.created_by, cs.created_at,
+              cs.undone_by, cs.direct_count, cs.cascade_count
+         FROM schedule_change_items ci
+         JOIN schedule_change_sets cs ON cs.id = ci.change_set_id
+        WHERE ci.item_id = ?
+        ORDER BY cs.created_at DESC, cs.id DESC`,
+    )
+    .all(itemId)
+
+  return rows.map((r) => {
+    const prior = JSON.parse(r.prior || '{}')
+    const next = JSON.parse(r.next || '{}')
+    return {
+      changeSetId: r.set_id,
+      itemId: r.item_id,
+      // 'direct' means this item is what someone actually moved; 'cascade'
+      // means it moved because something it depends on did. Worth showing —
+      // "we didn't touch this, it followed framing" is the useful explanation.
+      role: r.role,
+      origin: r.origin,
+      reason: r.reason,
+      from: { start: prior.start ?? '', end: prior.end ?? '', workDays: prior.workDays ?? null },
+      to: { start: next.start ?? '', end: next.end ?? '', workDays: next.workDays ?? null },
+      undone: Boolean(r.undone_by),
+      alsoMoved: Math.max(0, (r.direct_count ?? 0) + (r.cascade_count ?? 0) - 1),
+      createdBy: r.created_by,
+      createdAt: r.created_at,
+    }
+  })
+}

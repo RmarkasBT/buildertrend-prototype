@@ -50,6 +50,8 @@ export default function Schedule() {
   const [editingItem, setEditingItem] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  // BT offers the Phases grouping on the List view as well as the Gantt.
+  const [listPhases, setListPhases] = useState(false)
   // The job's working calendar, fetched so the browser derives dates the same
   // way the server does — otherwise the Gantt shades a hardcoded Mon-Fri while
   // the API cascades around real holidays.
@@ -67,6 +69,30 @@ export default function Schedule() {
   const cursor = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1)
 
   const weeks = useMemo(() => buildMonthGrid(cursor.getFullYear(), cursor.getMonth()), [cursor])
+
+  // List rows, optionally grouped under a phase header. Same shape the Gantt
+  // uses for its own Phases toggle, so the two views group identically.
+  const listRows = useMemo(() => {
+    if (!listPhases) return items.map((it) => ({ type: 'item', item: it }))
+    const byPhase = new Map()
+    for (const it of items) {
+      const key = it.phase || 'Unassigned'
+      if (!byPhase.has(key)) byPhase.set(key, [])
+      byPhase.get(key).push(it)
+    }
+    const out = []
+    for (const [phase, group] of byPhase) {
+      out.push({
+        type: 'phase',
+        phase,
+        count: group.length,
+        start: group.reduce((a, b) => (a < b.start ? a : b.start), group[0].start),
+        end: group.reduce((a, b) => (a > b.end ? a : b.end), group[0].end),
+      })
+      for (const it of group) out.push({ type: 'item', item: it })
+    }
+    return out
+  }, [items, listPhases])
 
   const itemsForDay = (day) => {
     const iso = toISODate(day)
@@ -242,7 +268,22 @@ export default function Schedule() {
           )}
 
           {!loading && !error && view === 'List' && (
-            <div className="mt-3 overflow-x-auto rounded-md border border-gray-15 bg-white">
+            <>
+            <div className="mt-3 flex items-center justify-end">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-70">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={listPhases}
+                  onClick={() => setListPhases((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${listPhases ? 'bg-brand-blue' : 'bg-gray-25'}`}
+                >
+                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${listPhases ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                </button>
+                Phases
+              </label>
+            </div>
+            <div className="mt-2 overflow-x-auto rounded-md border border-gray-15 bg-white">
               <table className="w-full min-w-[1100px] text-sm">
                 <thead className="border-b border-gray-15 bg-gray-5 text-left text-xs font-semibold text-gray-60">
                   <tr>
@@ -268,7 +309,20 @@ export default function Schedule() {
                 <tbody>
                   {items.length === 0 ? (
                     <tr><td colSpan={17} className="px-3 py-6 text-center text-gray-50">No schedule items yet.</td></tr>
-                  ) : items.map((it, i) => {
+                  ) : listRows.map((row, i) => {
+                    if (row.type === 'phase') {
+                      return (
+                        <tr key={`ph-${row.phase}`} className="border-b border-gray-15 bg-gray-5">
+                          <td colSpan={17} className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-70">
+                            {row.phase}
+                            <span className="ml-2 font-normal normal-case tracking-normal text-gray-50">
+                              {row.count} item{row.count === 1 ? '' : 's'} · {fmtDateShort(row.start)} – {fmtDateShort(row.end)}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    }
+                    const it = row.item
                     const preds = (it.predecessorIds || []).map((pid) => items.find((x) => x.id === pid)?.title).filter(Boolean)
                     return (
                       <tr key={it.id} className="border-t border-gray-15 hover:bg-gray-5">
@@ -322,6 +376,7 @@ export default function Schedule() {
                 <span>1-{items.length} of {items.length} items</span>
               </div>
             </div>
+            </>
           )}
 
           {!loading && !error && view === 'Gantt' && (

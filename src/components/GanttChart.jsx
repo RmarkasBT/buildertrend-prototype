@@ -72,6 +72,11 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
   const [linkDraft, setLinkDraft] = useState(null)
   const [linkError, setLinkError] = useState(null)
   const [linkToRemove, setLinkToRemove] = useState(null)
+  // A drag is held here until the user gives a Shift Reason, matching BT:
+  // "any adjustments made to schedule items will prompt you to ... log a Shift
+  // Reason and Shift Notes for proper record keeping".
+  const [pendingShift, setPendingShift] = useState(null)
+  const [shiftReason, setShiftReason] = useState('')
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
   const rowRefs = useRef(new Map())
@@ -241,7 +246,10 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
       }
       const verb = mode === 'move' ? 'Moved' : 'Resized'
       if (onApplyChanges) {
-        onApplyChanges([change], { origin: 'gantt_drag', reason: `${verb} ${item.title}` })
+        // Don't write yet — ask why first. The reason is what makes the Shifts
+        // history worth reading later; a bare "Moved X" tells nobody anything.
+        setPendingShift({ change, item, fallback: `${verb} ${item.title}` })
+        setShiftReason('')
       } else {
         const end = endFromWorkDays(change.start, change.workDays)
         onUpdateItem({ ...item, start: change.start, end, workDays: change.workDays })
@@ -300,6 +308,18 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     return m
   }, [rows])
 
+  const commitShift = () => {
+    if (!pendingShift) return
+    onApplyChanges([pendingShift.change], {
+      origin: 'gantt_drag',
+      // Fall back to a plain description rather than blocking the drag — a
+      // required field here would just train people to type "x".
+      reason: shiftReason.trim() || pendingShift.fallback,
+    })
+    setPendingShift(null)
+    setShiftReason('')
+  }
+
   const removeLink = () => {
     const succ = byId.get(linkToRemove.succId)
     if (succ) {
@@ -332,6 +352,36 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
             <button onClick={removeLink} className="font-semibold text-brand-blue underline">Remove link</button>
             <button onClick={() => setLinkToRemove(null)} className="text-gray-70 underline">Cancel</button>
           </span>
+        </div>
+      )}
+      {pendingShift && (
+        <div className="border-b border-gray-15 bg-info-bg px-3 py-2">
+          <div className="text-sm text-gray-80">
+            Moving <span className="font-semibold">{pendingShift.item.title}</span> to{' '}
+            {fmtDate(pendingShift.change.start)}. Why?
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              autoFocus
+              value={shiftReason}
+              onChange={(e) => setShiftReason(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitShift() }}
+              placeholder="Rain delay, sub unavailable, materials late…"
+              className="min-w-64 flex-1 rounded-sm border border-gray-20 px-2 py-1 text-sm"
+            />
+            <button
+              onClick={commitShift}
+              className="rounded-sm bg-brand-blue px-3 py-1 text-sm font-semibold text-white"
+            >
+              Save shift
+            </button>
+            <button
+              onClick={() => setPendingShift(null)}
+              className="rounded-sm border border-gray-20 px-3 py-1 text-sm text-gray-70"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       <div className="flex items-center justify-between border-b border-gray-15 px-3 py-2">

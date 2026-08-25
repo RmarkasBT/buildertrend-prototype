@@ -15,7 +15,7 @@ import {
 import * as estimates from './estimateRoutes.js'
 import * as dailyLogs from './dailyLogRoutes.js'
 import { jobIdError } from './jobs.js'
-import { applyBatch, undoChangeSet, getChangeSet, listChangeSets } from './changeSets.js'
+import { applyBatch, undoChangeSet, getChangeSet, listChangeSets, listShiftsForItem } from './changeSets.js'
 import * as workdays from './workdayRoutes.js'
 import * as baselines from './baselineRoutes.js'
 import { cascade, analyze } from '../src/lib/cascade.js'
@@ -84,6 +84,7 @@ function validateCascadeChanges(changes) {
 }
 
 const ID_ROUTE = /^\/api\/schedule\/([^/]+)$/
+const SCHEDULE_SHIFTS_ROUTE = /^\/api\/schedule\/([^/]+)\/shifts$/
 // /undo is matched before the bare /:id below, same reason the daily-log block
 // puts its fixed sub-paths first.
 const CHANGE_SET_UNDO_ROUTE = /^\/api\/change-sets\/([^/]+)\/undo$/
@@ -231,6 +232,12 @@ const server = createServer(async (req, res) => {
         return send(res, 200, { changeSet: null, items: result.items, plan: result.plan })
       }
       return send(res, 200, result)
+    }
+
+    // Per-item shift history. Fixed sub-path, so above ID_ROUTE.
+    const shiftsMatch = pathname.match(SCHEDULE_SHIFTS_ROUTE)
+    if (shiftsMatch && req.method === 'GET') {
+      return send(res, 200, listShiftsForItem(shiftsMatch[1]))
     }
 
     const idMatch = pathname.match(ID_ROUTE)

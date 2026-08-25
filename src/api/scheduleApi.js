@@ -71,6 +71,11 @@ export function listChangeSets(jobId, limit = 20) {
   return request(`/api/change-sets?jobId=${encodeURIComponent(jobId)}&limit=${limit}`)
 }
 
+/** Recorded date changes for one item — the Shifts tab. */
+export function listShifts(itemId) {
+  return request(`/api/schedule/${encodeURIComponent(itemId)}/shifts`)
+}
+
 // No dedicated copy endpoint — clone the item client-side (drop id, tweak
 // title) and create it as new, same as the old local-state handleCopy did.
 export function copyItem(item) {

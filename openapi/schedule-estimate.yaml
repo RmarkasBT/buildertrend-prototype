@@ -190,6 +190,73 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/schedule/{id}/shifts:
+    parameters:
+      - $ref: '#/components/parameters/ScheduleItemId'
+    get:
+      operationId: listScheduleItemShifts
+      tags: [Schedule]
+      summary: Every recorded date change for one item, and why — newest first.
+      description: |
+        The item's shift history. Read this to answer "why did this move?"
+        instead of inferring it from the current dates.
+
+        `reason` is what a person typed at the time ("Rain delay — glazing crew
+        pulled off site"). It's the most useful field here and worth quoting
+        rather than paraphrasing.
+
+        `role` matters as much as the dates. `direct` means someone moved THIS
+        item. `cascade` means it moved because something it depends on moved —
+        nobody edited it. Saying "we pushed MEP rough-in" when the record says
+        `cascade` gets the story backwards; it followed the delay upstream.
+
+        `alsoMoved` is how many other items moved in the same change, so a
+        one-item nudge can be told apart from a nine-item ripple. `undone: true`
+        means the change was later reverted and the dates it describes are no
+        longer in effect — don't report it as current.
+
+        Empty array means the item hasn't moved since it was created, which is
+        worth saying plainly rather than treating as missing data.
+      responses:
+        '200':
+          description: Shifts affecting this item, newest first. Empty if it has never moved.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    changeSetId: { type: string }
+                    itemId: { type: string }
+                    role:
+                      type: string
+                      enum: [direct, cascade]
+                    origin:
+                      type: string
+                      description: What initiated it — a Gantt drag, a batch call, an approved impact.
+                    reason: { type: string }
+                    from:
+                      type: object
+                      properties:
+                        start: { type: string, format: date }
+                        end: { type: string, format: date }
+                        workDays: { type: integer }
+                    to:
+                      type: object
+                      properties:
+                        start: { type: string, format: date }
+                        end: { type: string, format: date }
+                        workDays: { type: integer }
+                    undone:
+                      type: boolean
+                      description: The change was reverted; these dates are no longer in effect.
+                    alsoMoved:
+                      type: integer
+                      description: How many OTHER items moved in the same change.
+                    createdBy: { type: string }
+                    createdAt: { type: string, format: date-time }
+
   /api/schedule/cascade-preview:
     post:
       operationId: previewScheduleCascade
