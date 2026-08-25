@@ -341,6 +341,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/workday-exceptions:
+    get:
+      operationId: listWorkdayExceptions
+      tags: [Schedule]
+      summary: Days this job does or doesn't work, beyond its standard work week.
+      description: |
+        Holidays and closures that BLOCK a normally-working day
+        (`type: "non_workday"`), and extra days that OPEN a normally-off one
+        (`type: "extra_workday"`) — a Saturday push, for instance.
+
+        Read this before explaining a date. All schedule arithmetic already
+        routes around these, so a task can appear to skip a Monday or run
+        through a Saturday for a reason that is invisible in the item itself.
+        If someone asks why a duration doesn't line up with the calendar, this
+        is usually the answer.
+
+        Includes both this job's own exceptions and company-wide ones (those
+        come back with `jobId: ""`).
+
+        An exception with `sameEveryYear: true` repeats annually — only its
+        month and day matter, so a single row covers every Christmas and its
+        stored year may be in the past.
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+      responses:
+        '200':
+          description: Exceptions affecting this job, earliest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkdayException'
+        '400':
+          $ref: '#/components/responses/MissingJobId'
+
   /api/estimate:
     get:
       operationId: getEstimate
@@ -1362,6 +1398,44 @@ components:
                 description: Work days this can slip before any successor moves.
               critical: { type: boolean }
       required: [ok, changes, conflicts, warnings, counts, projectEnd, criticalIds]
+
+    WorkdayException:
+      type: object
+      description: |
+        One override on a job's standard work week. Read-only through the API —
+        creating and editing these is done on the Schedule page's Workday
+        Exceptions tab.
+      properties:
+        id: { type: string }
+        jobId:
+          type: string
+          description: The job this applies to. `""` means every job (a public holiday).
+        title:
+          type: string
+          description: What it is, e.g. "Thanksgiving" or "Saturday push to catch up".
+        type:
+          type: string
+          description: |
+            `non_workday` blocks a day that would normally work — nothing can be
+            scheduled on it. `extra_workday` opens a day that normally wouldn't.
+          enum: [non_workday, extra_workday]
+        start: { type: string, format: date }
+        end:
+          type: string
+          format: date
+          description: Inclusive. Equal to `start` for a single day.
+        sameEveryYear:
+          type: boolean
+          description: |
+            Repeats annually — only month and day are compared, so the stored
+            year may be in the past and still apply.
+        category:
+          type: string
+          description: Free-text grouping, e.g. "Holiday".
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, jobId, title, type, start, end, sameEveryYear, category, createdBy, createdAt, updatedAt]
 
     PredecessorLink:
       type: object

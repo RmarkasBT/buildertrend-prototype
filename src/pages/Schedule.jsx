@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useJob } from '../context/JobContext'
 import { useSchedule } from '../hooks/useSchedule'
 import { colorHex } from '../data/scheduleColors'
@@ -6,6 +6,9 @@ import { addDays, toISODate, fmtDateShort } from '../lib/dates'
 import ScheduleItemModal from '../components/ScheduleItemModal'
 import AssistantPanel from '../components/AssistantPanel'
 import GanttChart from '../components/GanttChart'
+import WorkdayExceptions from '../components/WorkdayExceptions'
+import * as workdayApi from '../api/workdayApi'
+import { buildWorkCalendar } from '../lib/workCalendar'
 
 // Tabs (Schedule/Baseline/Workday Exceptions), view toggle (Calendar/List/
 // Gantt), toolbar (gear/undo/Schedule Offline/More Actions/Filter/New
@@ -46,6 +49,18 @@ export default function Schedule() {
   const [editingItem, setEditingItem] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  // The job's working calendar, fetched so the browser derives dates the same
+  // way the server does — otherwise the Gantt shades a hardcoded Mon-Fri while
+  // the API cascades around real holidays.
+  const [calendar, setCalendar] = useState(() => buildWorkCalendar())
+  const loadCalendar = useCallback(() => {
+    if (!currentJob?.id) return
+    workdayApi
+      .getCalendar(currentJob.id)
+      .then((c) => setCalendar(buildWorkCalendar(c.workWeek, c.exceptions)))
+      .catch(() => {})
+  }, [currentJob?.id])
+  useEffect(() => { loadCalendar() }, [loadCalendar])
 
   const base = new Date(2026, 7, 1) // August 2026, matching the captured screenshot
   const cursor = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1)
@@ -91,7 +106,12 @@ export default function Schedule() {
         ))}
       </div>
 
-      {tab !== 'Schedule' ? (
+      {tab === 'Workday Exceptions' ? (
+        <WorkdayExceptions
+          jobId={currentJob.id}
+          onChanged={() => { loadCalendar(); refresh() }}
+        />
+      ) : tab !== 'Schedule' ? (
         <div className="mt-6 text-sm text-gray-50">No {tab.toLowerCase()} data yet.</div>
       ) : (
         <>
@@ -306,7 +326,7 @@ export default function Schedule() {
               {items.length === 0 ? (
                 <div className="rounded-md border border-gray-15 bg-white py-6 text-center text-sm text-gray-50">No schedule items yet.</div>
               ) : (
-                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} onApplyChanges={applyChanges} />
+                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} onApplyChanges={applyChanges} calendar={calendar} />
               )}
             </div>
           )}

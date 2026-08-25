@@ -60,7 +60,7 @@ function ToggleSwitch({ checked, onChange, label }) {
   )
 }
 
-export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges }) {
+export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges, calendar }) {
   const [zoom, setZoom] = useState('Day')
   const [groupByPhase, setGroupByPhase] = useState(false)
   const [showCritical, setShowCritical] = useState(false)
@@ -106,14 +106,19 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     return blocks
   }, [rangeStart, totalDays])
 
-  const weekendCols = useMemo(() => {
+  // Shade whatever the job's calendar says doesn't work — so a holiday or a
+  // blocked closure appears alongside the weekends, and an opened Saturday
+  // correctly appears NOT shaded. Falls back to Sat/Sun before the calendar
+  // has loaded.
+  const nonWorkingCols = useMemo(() => {
     const cols = []
     for (let i = 0; i < totalDays; i++) {
-      const w = weekdayIndex(addDays(rangeStart, i))
-      if (w === 0 || w === 6) cols.push(i)
+      const iso = addDays(rangeStart, i)
+      const off = calendar ? !calendar.isWorkDay(iso) : [0, 6].includes(weekdayIndex(iso))
+      if (off) cols.push(i)
     }
     return cols
-  }, [rangeStart, totalDays])
+  }, [rangeStart, totalDays, calendar])
 
   const phaseGroups = useMemo(() => {
     if (!groupByPhase) return null
@@ -451,11 +456,21 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
                   {Array.from({ length: totalDays }, (_, i) => {
                     const iso = addDays(rangeStart, i)
                     const w = weekdayIndex(iso)
-                    const weekend = w === 0 || w === 6
+                    // Header shading has to agree with the body's, or a holiday
+                    // shows as a shaded column under an unshaded date.
+                    const off = calendar ? !calendar.isWorkDay(iso) : w === 0 || w === 6
+                    const why = calendar?.reasonFor?.(iso)
                     return (
-                      <div key={i} className={`flex shrink-0 flex-col items-center justify-center gap-0.5 border-r border-gray-15 ${weekend ? 'bg-gray-5' : ''}`} style={{ width: dayWidth }}>
+                      <div
+                        key={i}
+                        title={why?.title || undefined}
+                        className={`flex shrink-0 flex-col items-center justify-center gap-0.5 border-r border-gray-15 ${off ? 'bg-gray-5' : ''}`}
+                        style={{ width: dayWidth }}
+                      >
                         <div>{WEEKDAY_ABBR[w]}</div>
-                        <div className="font-medium tabular-nums text-gray-70">{parseISODate(iso).getDate()}</div>
+                        <div className={`font-medium tabular-nums ${why?.title ? 'text-warning-fg' : 'text-gray-70'}`}>
+                          {parseISODate(iso).getDate()}
+                        </div>
                       </div>
                     )
                   })}
@@ -465,7 +480,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
 
             {/* weekend column shading */}
             <div className="pointer-events-none absolute inset-x-0 top-0" style={{ height: contentH, top: headerH }}>
-              {weekendCols.map((i) => (
+              {nonWorkingCols.map((i) => (
                 <div key={i} className="absolute top-0 bg-gray-5" style={{ left: i * dayWidth, width: dayWidth, height: contentH }} />
               ))}
             </div>

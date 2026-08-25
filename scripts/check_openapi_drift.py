@@ -308,6 +308,20 @@ def check_routes(spec: dict) -> None:
         if not (r[0].startswith("/api/change-sets") and r not in spec_ops)
     }
 
+    # Workday exceptions: the LIST is documented (an agent needs it to explain
+    # why a date skipped a Monday), but the writes deliberately are not.
+    #
+    # The reason is an asymmetry worth keeping in mind: a cascade apply is
+    # recorded in a change set and can be undone in one click, whereas creating
+    # a non-workday shifts dates IMPLICITLY across the job — or every job — with
+    # nothing to revert. Until exceptions participate in change sets, blocking a
+    # day stays a human action on the Workday Exceptions tab. /calendar is a
+    # convenience view of the same data and would just cost tokens.
+    impl = {
+        r for r in impl
+        if not (r[0].startswith("/api/workday-exceptions") and r not in spec_ops)
+    }
+
     undocumented = impl - spec_ops
     if undocumented:
         fail(

@@ -4,6 +4,11 @@
 // card and the "Client contact" detail popup — only the values are invented.
 // `subIds` reference src/data/subsVendors.js, matching the Job Info >
 // Subs/vendors tab (name + avatar only, as observed there).
+//
+// `workDays` is the job's standard work week as weekday indices (0 = Sunday),
+// mirroring Job Info's "Work Days" dropdown in the real product. It sets which
+// days the schedule can place work on; per-date holidays and extra Saturdays
+// layer on top of it as Workday Exceptions (src/lib/workCalendar.js).
 export const jobs = [
   {
     id: 'j1',
@@ -15,6 +20,7 @@ export const jobs = [
     ],
     projectManagers: ['Sam Okafor'],
     subIds: ['sv1', 'sv2', 'sv3', 'sv4'],
+    workDays: [1, 2, 3, 4, 5],
     clockedIn: 2,
   },
   {

@@ -23,6 +23,7 @@
 import { db, rowToItem, rowToChangeSet, rowToChangeItem, reserveIds } from './db.js'
 import { listItems, patchDates } from './routes.js'
 import { cascade } from '../src/lib/cascade.js'
+import { calendarFor } from './workdayRoutes.js'
 import { todayIso } from '../src/lib/dates.js'
 
 const CURRENT_USER = 'Ruhaab Markas'
@@ -66,7 +67,9 @@ function snapshot(item) {
  */
 export function planBatch(jobId, requests, opts = {}) {
   const items = listItems(jobId)
-  const plan = cascade(items, requests, { mode: opts.mode, today: todayIso() })
+  // The job's real calendar, so holidays and extra Saturdays affect an apply
+  // exactly as they affect the preview and the Gantt.
+  const plan = cascade(items, requests, { mode: opts.mode, today: todayIso(), calendar: calendarFor(jobId) })
   return { items, plan }
 }
 

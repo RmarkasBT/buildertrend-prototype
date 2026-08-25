@@ -16,6 +16,7 @@ import * as estimates from './estimateRoutes.js'
 import * as dailyLogs from './dailyLogRoutes.js'
 import { jobIdError } from './jobs.js'
 import { applyBatch, undoChangeSet, getChangeSet, listChangeSets } from './changeSets.js'
+import * as workdays from './workdayRoutes.js'
 import { cascade, analyze } from '../src/lib/cascade.js'
 import { isISODate, todayIso } from '../src/lib/dates.js'
 import { validateDailyLogBody, validateEstimateItemBody } from './validate.js'
@@ -86,6 +87,9 @@ const ID_ROUTE = /^\/api\/schedule\/([^/]+)$/
 // puts its fixed sub-paths first.
 const CHANGE_SET_UNDO_ROUTE = /^\/api\/change-sets\/([^/]+)\/undo$/
 const CHANGE_SET_ID_ROUTE = /^\/api\/change-sets\/([^/]+)$/
+// /calendar is a fixed sub-path and is matched before this, same rule as the
+// rest of the file.
+const WORKDAY_EXCEPTION_ROUTE = /^\/api\/workday-exceptions\/([^/]+)$/
 const ESTIMATE_GROUP_ROUTE = /^\/api\/estimate\/groups\/([^/]+)$/
 const ESTIMATE_ITEM_ROUTE = /^\/api\/estimate\/items\/([^/]+)$/
 const ESTIMATE_ITEM_DUPLICATE_ROUTE = /^\/api\/estimate\/items\/([^/]+)\/duplicate$/
@@ -152,7 +156,8 @@ const server = createServer(async (req, res) => {
       if (badChanges) return send(res, 400, { error: badChanges })
 
       const items = listItems(body.jobId)
-      const plan = cascade(items, requests, { mode: body.mode, today: todayIso() })
+      const calendar = workdays.calendarFor(body.jobId)
+      const plan = cascade(items, requests, { mode: body.mode, today: todayIso(), calendar })
 
       if (!plan.ok) {
         if (plan.error === 'unknown_item') {
@@ -177,7 +182,7 @@ const server = createServer(async (req, res) => {
       // doubles the payload, and payload is tokens for an agent.
       let analysis
       if (body.includeAnalysis) {
-        const base = analyze(items)
+        const base = analyze(items, { calendar })
         analysis = base.ok
           ? [...base.nodes.values()].map((n) => ({
               itemId: n.id,
@@ -246,6 +251,53 @@ const server = createServer(async (req, res) => {
     if (idMatch && req.method === 'DELETE') {
       const ok = deleteItem(idMatch[1])
       if (!ok) return send(res, 404, { error: 'not found' })
+      return send(res, 204)
+    }
+
+    // --- Workday Exceptions ---------------------------------------------
+    // The calendar route is read-only and exists so the browser derives dates
+    // the same way the server does. Without it the Gantt would shade weekends
+    // from a hardcoded Mon-Fri while the API cascaded around real holidays.
+    if (pathname === '/api/workday-exceptions/calendar' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      const cal = workdays.calendarFor(jobId)
+      return send(res, 200, { jobId, workWeek: cal.workWeek, exceptions: cal.exceptions })
+    }
+
+    if (pathname === '/api/workday-exceptions' && req.method === 'GET') {
+      // jobId is optional here: omitting it lists every exception, which is
+      // what the management tab shows.
+      const jobId = searchParams.get('jobId')
+      if (jobId) {
+        const badJob = jobIdError(jobId)
+        if (badJob) return send(res, 400, { error: badJob })
+      }
+      return send(res, 200, workdays.listExceptions(jobId || null))
+    }
+
+    if (pathname === '/api/workday-exceptions' && req.method === 'POST') {
+      const body = await readBody(req)
+      const bad = workdays.validateException(body)
+      if (bad) return send(res, 400, { error: bad })
+      return send(res, 201, workdays.createException(body))
+    }
+
+    const wxMatch = pathname.match(WORKDAY_EXCEPTION_ROUTE)
+    if (wxMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const body = await readBody(req)
+      const bad = workdays.validateException(body, { partial: true })
+      if (bad) return send(res, 400, { error: bad })
+      const updated = workdays.updateException(wxMatch[1], body)
+      if (!updated) return send(res, 404, { error: 'workday exception not found' })
+      return send(res, 200, updated)
+    }
+
+    if (wxMatch && req.method === 'DELETE') {
+      if (!workdays.deleteException(wxMatch[1])) {
+        return send(res, 404, { error: 'workday exception not found' })
+      }
       return send(res, 204)
     }
 

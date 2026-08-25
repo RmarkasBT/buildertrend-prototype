@@ -112,6 +112,34 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_schedule_change_sets_job_id
     ON schedule_change_sets(job_id);
 
+  -- Workday Exceptions ---------------------------------------------------
+  -- Per-date overrides on a job's standard work week: a holiday that blocks a
+  -- working day, or an extra Saturday that opens a non-working one. Observed
+  -- as a real tab on the Schedule page and documented in BT's help centre
+  -- (Title / Type / Start-end / Same Every Year / Category / Apply To).
+  --
+  -- job_id = '' means the exception applies to EVERY job, which is what a
+  -- public holiday is. Anything else scopes it to that one job.
+  CREATE TABLE IF NOT EXISTS workday_exceptions (
+    id              TEXT PRIMARY KEY,
+    job_id          TEXT NOT NULL DEFAULT '',
+    title           TEXT NOT NULL,
+    -- 'non_workday' blocks a normally-working day; 'extra_workday' opens a
+    -- normally-off one. Validated in JS, like every other status column here.
+    type            TEXT NOT NULL DEFAULT 'non_workday',
+    start_date      TEXT NOT NULL,
+    end_date        TEXT NOT NULL,
+    -- Repeats annually: only month-day is compared, so one row covers every
+    -- Christmas rather than needing a row per year.
+    same_every_year INTEGER NOT NULL DEFAULT 0,
+    category        TEXT NOT NULL DEFAULT '',
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_workday_exceptions_job_id
+    ON workday_exceptions(job_id);
+
   CREATE TABLE IF NOT EXISTS schedule_change_items (
     change_set_id TEXT NOT NULL,
     item_id       TEXT NOT NULL,
@@ -134,6 +162,7 @@ for (const [key, start] of [
   ['next_estimate_group_id', '100'],
   ['next_estimate_item_id', '100'],
   ['next_change_set_id', '100'],
+  ['next_workday_exception_id', '100'],
 ]) {
   db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`).run(key, start)
 }
@@ -620,4 +649,38 @@ export function rowToSettings(row) {
       client: Boolean(row.notify_client),
     },
   }
+}
+
+// DB row <-> wire shape for workday exceptions.
+export function rowToException(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    title: row.title,
+    type: row.type,
+    start: row.start_date,
+    end: row.end_date,
+    sameEveryYear: Boolean(row.same_every_year),
+    category: row.category,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function exceptionToRow(exc) {
+  return {
+    job_id: exc.jobId ?? '',
+    title: exc.title,
+    type: exc.type === 'extra_workday' ? 'extra_workday' : 'non_workday',
+    start_date: exc.start,
+    end_date: exc.end,
+    same_every_year: exc.sameEveryYear ? 1 : 0,
+    category: exc.category ?? '',
+  }
+}
+
+export function nextExceptionId() {
+  return reserveIds('next_workday_exception_id', 'wx', 1)[0]
 }
