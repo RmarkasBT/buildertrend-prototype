@@ -701,3 +701,68 @@ Verified across 28 cases: every invalid input 400s, every legitimate partial
 edit still 200s, a draft survives the whole run as a draft, and both the Daily
 Log form and the Estimate line-item modal still save through the UI (the modal
 coerces with `Number(...) || 0` before submitting, so it never sends strings).
+
+## Schedule chrome — recovered from a public article (2026-08-25)
+
+The live page still has not been reached (it needs a Buildertrend login). But
+BT's **"Navigating Project Management"** help article
+(`buildertrend.com/help-article/navigating-project-management/`) carries a
+`Schedule` section with three full-size desktop screenshots, and those are the
+first real images of the Schedule chrome available to this repo. The article was
+missed earlier because the schedule-specific articles were searched by title;
+this one is a cross-feature tour that happens to contain a Schedule section.
+
+Saved: the three images are hotlinked from
+`storage.googleapis.com/btnet-prod-storage-learning-center-us/images/10054308-navigating-project-management/`
+(`Screenshot 2024-10-28 at 11_21_33 AM`, `11_27_51 AM`, `11_30_22 AM`).
+
+### What they prove
+
+**1 — the page chrome** (month calendar, Nov 2024):
+- Exactly **two** tabs: `Schedule` and `Workday Exceptions`.
+- A separate segmented view switcher below them: `Calendar | List | Gantt`,
+  with **Calendar** the default and active.
+- A second toolbar row: a `Month` select (options **Month / Week / Day /
+  Agenda**), a borderless `Today`, then a centred stepper `‹ [November, 2024] ›`
+  with the label in its **own bordered box** — and BT writes the month with a
+  comma. Hard right: a maximise glyph and `Expand All`.
+- Row one, right side: `More Actions ⌄` and `Filter (1)` — the filter carries an
+  **active count in parentheses**.
+- Breadcrumb `Glansburg - New Home` above a bold `Schedule` title, with a `‹`
+  collapse chevron boxed at the far left.
+- Month grid weeks start **Sunday**; item bars are left-aligned text inside a
+  coloured bar; weekend columns are shaded.
+
+**2 — the read-only Schedule Item view**: stacked label/value pairs for Job,
+Title, Start Date, End Date, **Work Days**, Assignees (initials avatar), then a
+`Messaging` / `Comments` rich-text composer (B I U S, mention, link, emoji,
+undo/redo, clear, send) and a collapsed `Viewer & Notification Settings`.
+
+This one is also **independent evidence for work-day duration semantics**:
+`Nov 25 → Nov 27, 2024` is displayed as `Work Days: 3 days`. Mon/Tue/Wed — three
+*working* days, inclusive of both ends. That is exactly the convention
+`src/lib/dates.js` implements (`durationDays` inclusive, `endFromWorkDays`
+advancing `n-1`), which until now rested only on the seed fixtures.
+
+**3 — notification settings expanded**: a `Notify` token field of people chips
+(initials avatar + name + × remove), and an `RFIs` section with `Create RFI`.
+
+### What they do NOT prove
+
+**The Gantt view is still never shown.** All three screenshots are Calendar or
+item-detail. So the contradiction recorded above stands: the Gantt's fidelity to
+the real product remains **UNKNOWN**.
+
+One detail does mildly *corroborate* `GanttChart.jsx`'s header, though. That
+header claims the Gantt has a zoom dropdown of **Day/Week/Month/Year**. This
+article shows the Calendar's scale dropdown as **Month/Week/Day/Agenda**. Those
+are two different control sets on two different views — which is what a real
+product looks like, and is not the mistake someone inventing a memory would
+make. It is corroboration, not proof.
+
+### Acted on
+
+The nav row was rebuilt to this layout and the `Month/Week/Day/Agenda` scales
+were implemented for real (see `src/pages/Schedule.jsx`). `Filter (1)`'s count
+was **not** copied: no filter is applied in this app, so a hardcoded `(1)` would
+be decoration claiming state that does not exist.

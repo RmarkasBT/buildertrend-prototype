@@ -23,6 +23,8 @@ function parts(iso) {
   return [y, m, d]
 }
 
+const pad2 = (n) => String(n).padStart(2, '0')
+
 /** True for a well-formed 'YYYY-MM-DD' string that names a real calendar day. */
 export function isISODate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value ?? ''))) return false
@@ -120,6 +122,41 @@ export function isWeekend(iso) {
   const w = weekdayIndex(iso)
   return w === 0 || w === 6
 }
+
+// --- calendar-month navigation ----------------------------------------------
+// The Schedule calendar pages by month, week and day off a single anchor date.
+// Month stepping is the only one that needs care, so it lives here with the
+// rest of the date math rather than in the page.
+
+/** Days in a 1-indexed month, e.g. daysInMonth(2024, 2) === 29. */
+export function daysInMonth(year, month1) {
+  return new Date(Date.UTC(year, month1, 0)).getUTCDate() // day 0 of the next month
+}
+
+/**
+ * Add calendar months, clamping the day to the target month's length.
+ *
+ * Deliberately NOT `new Date(y, m + n, d)`: that rolls Jan 31 + 1 month into
+ * Mar 2 or 3, so a month navigator built on it skips February entirely. A
+ * calendar's Next button must land on Feb 29, and Jan 31 + 1 - 1 is allowed to
+ * be lossy — that is what clamping means.
+ */
+export function addMonths(iso, n) {
+  const [y, m, d] = parts(iso)
+  const t = y * 12 + (m - 1) + Math.trunc(n)
+  const ny = Math.floor(t / 12)
+  const nm = (t % 12) + 1
+  return `${ny}-${pad2(nm)}-${pad2(Math.min(d, daysInMonth(ny, nm)))}`
+}
+
+/** The 1st of the month containing `iso`. */
+export const firstOfMonth = (iso) => `${iso.slice(0, 8)}01`
+
+/** The last day of the month containing `iso`. */
+export const lastOfMonth = (iso) => addDays(addMonths(firstOfMonth(iso), 1), -1)
+
+/** The Sunday that starts the week containing `iso`. */
+export const startOfWeek = (iso) => addDays(iso, -weekdayIndex(iso))
 
 const MED = { month: 'short', day: 'numeric', year: 'numeric' }
 

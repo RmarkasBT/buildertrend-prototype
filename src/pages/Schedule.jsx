@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useJob } from '../context/JobContext'
 import { useSchedule } from '../hooks/useSchedule'
 import { colorHex } from '../data/scheduleColors'
-import { addDays, toISODate, fmtDateShort } from '../lib/dates'
+import {
+  addDays, toISODate, fmtDate, fmtDateShort, weekdayIndex, todayIso,
+  addMonths, firstOfMonth, lastOfMonth, startOfWeek,
+} from '../lib/dates'
 import ScheduleItemModal from '../components/ScheduleItemModal'
 import AssistantPanel from '../components/AssistantPanel'
 import GanttChart from '../components/GanttChart'
@@ -22,23 +25,85 @@ import { subsVendors } from '../data/subsVendors'
 // Schedule Item" opens it blank. Both create/edit/delete/copy actually
 // mutate this page's state, matching the real Save/Copy/Delete flow.
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const WEEKDAYS_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+]
+// BT's calendar scales, in the order its dropdown lists them.
+const SCALES = ['Month', 'Week', 'Day', 'Agenda']
 
-function buildMonthGrid(year, month) {
-  const first = new Date(year, month, 1)
-  const start = new Date(first)
-  start.setDate(first.getDate() - first.getDay())
+/** The month grid, padded out to whole Sunday-Saturday weeks. */
+function buildMonthGrid(anchor) {
+  const last = lastOfMonth(anchor)
   const weeks = []
-  let cursor = new Date(start)
-  for (let w = 0; w < 6; w++) {
+  let d = startOfWeek(firstOfMonth(anchor))
+  while (d <= last) {
     const week = []
-    for (let d = 0; d < 7; d++) {
-      week.push(new Date(cursor))
-      cursor.setDate(cursor.getDate() + 1)
+    for (let i = 0; i < 7; i++) {
+      week.push(d)
+      d = addDays(d, 1)
     }
     weeks.push(week)
-    if (cursor.getMonth() !== month && cursor.getDate() > 7) break
   }
   return weeks
+}
+
+/** One Sunday-Saturday week containing `anchor`, shaped like a month grid. */
+function buildWeek(anchor) {
+  const start = startOfWeek(anchor)
+  return [Array.from({ length: 7 }, (_, i) => addDays(start, i))]
+}
+
+/** How far one press of the chevrons moves, per scale. */
+function stepAnchor(anchor, scale, dir) {
+  if (scale === 'Day') return addDays(anchor, dir)
+  if (scale === 'Week') return addDays(anchor, dir * 7)
+  return addMonths(anchor, dir) // Month and Agenda both page by month
+}
+
+/**
+ * The nav row's label. BT writes the month with a comma ("November, 2024"),
+ * which reads like a typo until you see it set in its own box.
+ */
+function rangeLabel(anchor, scale) {
+  const [y, m, d] = anchor.split('-').map(Number)
+  if (scale === 'Day') return `${WEEKDAYS_ABBR[weekdayIndex(anchor)]}, ${MONTHS[m - 1]} ${d}, ${y}`
+  if (scale === 'Week') {
+    const start = startOfWeek(anchor)
+    return `${fmtDateShort(start)} – ${fmtDateShort(addDays(start, 6))}`
+  }
+  return `${MONTHS[m - 1]}, ${y}`
+}
+
+/**
+ * One day cell in the Month or Week grid. `cap` is the "+N more" threshold,
+ * and Infinity once Expand All is on.
+ */
+function DayCell({ iso, items, muted, cap, tall, onOpen }) {
+  const shown = cap === Infinity ? items : items.slice(0, cap)
+  const hidden = items.length - shown.length
+  return (
+    <div
+      className={`border-r border-gray-15 p-1 last:border-r-0 ${tall ? 'min-h-64' : 'min-h-20'} ${
+        muted ? 'bg-gray-5/50' : ''
+      }`}
+    >
+      <div className={`text-xs ${muted ? 'text-gray-30' : 'text-gray-70'}`}>{Number(iso.slice(8))}</div>
+      {shown.map((it) => (
+        <button
+          key={it.id}
+          onClick={() => onOpen(it)}
+          className="mt-1 block w-full truncate rounded-sm px-1 py-0.5 text-left text-[11px] text-white"
+          style={{ backgroundColor: colorHex(it.color) }}
+          title={it.title}
+        >
+          {it.title}
+        </button>
+      ))}
+      {hidden > 0 && <div className="mt-0.5 text-[11px] text-brand-blue">+{hidden} more</div>}
+    </div>
+  )
 }
 
 export default function Schedule() {
@@ -49,7 +114,15 @@ export default function Schedule() {
   } = useSchedule(currentJob?.id)
   const [view, setView] = useState('Calendar')
   const [tab, setTab] = useState('Schedule')
-  const [monthOffset, setMonthOffset] = useState(0)
+  // The calendar's scale and the date it is centred on. BT drives all four
+  // scales off one anchor plus one pair of chevrons, so the anchor is the state
+  // and the visible span is derived.
+  const [scale, setScale] = useState('Month')
+  const [anchor, setAnchor] = useState('2026-08-01') // August 2026, matching the captured screenshot
+  // "Expand All" uncaps the per-day "+N more" overflow; the maximise control
+  // takes the calendar full-screen. Both are BT nav-row affordances.
+  const [expandAll, setExpandAll] = useState(false)
+  const [maximized, setMaximized] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
@@ -74,6 +147,15 @@ export default function Schedule() {
   }, [currentJob?.id])
   useEffect(() => { loadCalendar() }, [loadCalendar])
 
+  // A full-screen overlay has to be dismissible from the keyboard, or the only
+  // way out is finding one button.
+  useEffect(() => {
+    if (!maximized) return
+    const onKey = (e) => { if (e.key === 'Escape') setMaximized(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [maximized])
+
   // Baseline rows for the Gantt's Baseline toggle. Null until fetched; an
   // absent baseline is a normal state, so failures are silent.
   const [baselineRows, setBaselineRows] = useState([])
@@ -85,10 +167,13 @@ export default function Schedule() {
       .catch(() => setBaselineRows([]))
   }, [currentJob?.id, items])
 
-  const base = new Date(2026, 7, 1) // August 2026, matching the captured screenshot
-  const cursor = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1)
-
-  const weeks = useMemo(() => buildMonthGrid(cursor.getFullYear(), cursor.getMonth()), [cursor])
+  // Month and Week both render a grid of Sunday-Saturday weeks and differ only
+  // in how many rows and how tall. Day and Agenda render their own way.
+  const weeks = useMemo(
+    () => (scale === 'Week' ? buildWeek(anchor) : buildMonthGrid(anchor)),
+    [anchor, scale],
+  )
+  const anchorMonth = anchor.slice(0, 7)
 
   // List rows, optionally grouped under a phase header. Same shape the Gantt
   // uses for its own Phases toggle, so the two views group identically.
@@ -124,10 +209,18 @@ export default function Schedule() {
     [items],
   )
 
-  const itemsForDay = (day) => {
-    const iso = toISODate(day)
-    return items.filter((it) => it.start <= iso && iso <= it.end)
-  }
+  const itemsForDay = (iso) => items.filter((it) => it.start <= iso && iso <= it.end)
+
+  // Agenda lists every item overlapping the anchored month, earliest first — a
+  // flat chronology rather than a grid.
+  const agendaRows = useMemo(() => {
+    const from = firstOfMonth(anchor)
+    const to = lastOfMonth(anchor)
+    return items
+      .filter((it) => it.start <= to && it.end >= from)
+      .slice()
+      .sort((a, b) => (a.start === b.start ? a.title.localeCompare(b.title) : a.start < b.start ? -1 : 1))
+  }, [items, anchor])
 
   const openCreate = (afterItem) => {
     setEditingItem(
@@ -242,16 +335,67 @@ export default function Schedule() {
         />
       ) : (
         <>
-          <div className="mt-3 flex items-center gap-3">
-            <button onClick={() => setMonthOffset((o) => o - 1)}>‹</button>
-            <div className="font-semibold text-gray-90">
-              {cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
-            </div>
-            <button onClick={() => setMonthOffset((o) => o + 1)}>›</button>
-            <button onClick={() => setMonthOffset(0)} className="ml-2 rounded-sm border border-gray-20 px-2 py-0.5 text-sm">
+          {/* BT's nav row: scale select and Today on the left, the date
+              stepper centred with its label in a bordered box, and the
+              maximise + Expand All controls hard right.
+
+              Calendar only. The List view has its own Phases toggle and the
+              Gantt draws its own full timeline, so on those two every control
+              here is inert — and an enabled dropdown that changes nothing is
+              worse than no dropdown. */}
+          {view === 'Calendar' && (
+          <div className="mt-3 flex items-center gap-2 text-sm">
+            <select
+              value={scale}
+              onChange={(e) => setScale(e.target.value)}
+              aria-label="Calendar scale"
+              className="rounded-sm border border-gray-20 px-2 py-1"
+            >
+              {SCALES.map((sc) => <option key={sc} value={sc}>{sc}</option>)}
+            </select>
+            <button onClick={() => setAnchor(todayIso())} className="px-2 py-1 text-gray-70">
               Today
             </button>
+
+            <div className="mx-auto flex items-center gap-2">
+              <button
+                onClick={() => setAnchor((a) => stepAnchor(a, scale, -1))}
+                aria-label="Previous"
+                className="px-1 text-gray-60"
+              >
+                ‹
+              </button>
+              <div className="min-w-44 rounded-sm border border-gray-20 px-3 py-1 text-center font-semibold text-gray-90">
+                {rangeLabel(anchor, scale)}
+              </div>
+              <button
+                onClick={() => setAnchor((a) => stepAnchor(a, scale, 1))}
+                aria-label="Next"
+                className="px-1 text-gray-60"
+              >
+                ›
+              </button>
+            </div>
+
+            <button
+              onClick={() => setMaximized(true)}
+              aria-label="Full screen"
+              title="Full screen"
+              className="px-2 py-1 text-gray-60"
+            >
+              ⛶
+            </button>
+            {/* Agenda and Day are already flat lists, so there is nothing to
+                expand — BT greys the control rather than hiding it. */}
+            <button
+              onClick={() => setExpandAll((v) => !v)}
+              disabled={scale === 'Agenda' || scale === 'Day'}
+              className="px-2 py-1 text-brand-blue disabled:text-gray-30"
+            >
+              {expandAll ? 'Collapse All' : 'Expand All'}
+            </button>
           </div>
+          )}
 
           {conflicts.length > 0 && (
             <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
@@ -307,39 +451,119 @@ export default function Schedule() {
           )}
 
           {!loading && !error && view === 'Calendar' && (
-            <div className="mt-3 overflow-hidden rounded-md border border-gray-15 bg-white">
-              <div className="grid grid-cols-7 border-b border-gray-15 bg-gray-5 text-xs font-semibold text-gray-60">
-                {WEEKDAYS.map((w) => (
-                  <div key={w} className="px-2 py-1">{w}</div>
-                ))}
-              </div>
-              {weeks.map((week, wi) => (
-                <div key={wi} className="grid grid-cols-7 border-b border-gray-15 last:border-b-0">
-                  {week.map((day) => {
-                    const dayItems = itemsForDay(day)
-                    const inMonth = day.getMonth() === cursor.getMonth()
-                    return (
-                      <div key={day.toISOString()} className={`min-h-20 border-r border-gray-15 p-1 last:border-r-0 ${inMonth ? '' : 'bg-gray-5/50'}`}>
-                        <div className={`text-xs ${inMonth ? 'text-gray-70' : 'text-gray-30'}`}>{day.getDate()}</div>
-                        {dayItems.slice(0, 2).map((it) => (
-                          <button
-                            key={it.id}
-                            onClick={() => openEdit(it)}
-                            className="mt-1 block w-full truncate rounded-sm px-1 py-0.5 text-left text-[11px] text-white"
-                            style={{ backgroundColor: colorHex(it.color) }}
-                            title={it.title}
-                          >
-                            {it.title}
-                          </button>
-                        ))}
-                        {dayItems.length > 2 && (
-                          <div className="mt-0.5 text-[11px] text-brand-blue">+{dayItems.length - 2} more</div>
-                        )}
-                      </div>
-                    )
-                  })}
+            <div
+              className={
+                maximized
+                  ? 'fixed inset-0 z-40 overflow-auto bg-white p-4'
+                  : 'mt-3'
+              }
+            >
+              {maximized && (
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="font-semibold text-gray-90">
+                    {currentJob.name} · {rangeLabel(anchor, scale)}
+                  </div>
+                  <button
+                    onClick={() => setMaximized(false)}
+                    className="rounded-sm border border-gray-20 px-2 py-1 text-sm text-gray-70"
+                  >
+                    Exit full screen
+                  </button>
                 </div>
-              ))}
+              )}
+
+              {/* Agenda: a flat chronology of the anchored month. */}
+              {scale === 'Agenda' && (
+                <div className="overflow-hidden rounded-md border border-gray-15 bg-white">
+                  {agendaRows.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-sm text-gray-50">
+                      Nothing scheduled in {rangeLabel(anchor, 'Month')}.
+                    </div>
+                  ) : (
+                    agendaRows.map((it) => (
+                      <button
+                        key={it.id}
+                        onClick={() => openEdit(it)}
+                        className="flex w-full items-center gap-3 border-b border-gray-15 px-3 py-2 text-left last:border-b-0 hover:bg-gray-5"
+                      >
+                        <span
+                          className="h-3 w-3 shrink-0 rounded-sm"
+                          style={{ backgroundColor: colorHex(it.color) }}
+                        />
+                        <span className="w-44 shrink-0 text-xs tabular-nums text-gray-60">
+                          {fmtDate(it.start)}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-gray-90">{it.title}</span>
+                        <span className="shrink-0 text-xs tabular-nums text-gray-50">
+                          {fmtDateShort(it.start)} – {fmtDateShort(it.end)}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Day: one column, everything on the anchored date. */}
+              {scale === 'Day' && (
+                <div className="overflow-hidden rounded-md border border-gray-15 bg-white">
+                  <div className="border-b border-gray-15 bg-gray-5 px-3 py-1 text-xs font-semibold text-gray-60">
+                    {WEEKDAYS[weekdayIndex(anchor)]}
+                  </div>
+                  {itemsForDay(anchor).length === 0 ? (
+                    <div className="px-3 py-6 text-center text-sm text-gray-50">
+                      Nothing scheduled on {fmtDate(anchor)}.
+                    </div>
+                  ) : (
+                    itemsForDay(anchor).map((it) => (
+                      <button
+                        key={it.id}
+                        onClick={() => openEdit(it)}
+                        className="flex w-full items-center gap-3 border-b border-gray-15 px-3 py-2 text-left last:border-b-0 hover:bg-gray-5"
+                      >
+                        <span
+                          className="h-3 w-3 shrink-0 rounded-sm"
+                          style={{ backgroundColor: colorHex(it.color) }}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-gray-90">{it.title}</span>
+                        <span className="shrink-0 text-xs tabular-nums text-gray-50">
+                          {fmtDateShort(it.start)} – {fmtDateShort(it.end)}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Month and Week: the same Sunday-Saturday grid. Week shows the
+                  date beside each weekday name, since one row of seven cells
+                  gives no other clue which week you are looking at. */}
+              {(scale === 'Month' || scale === 'Week') && (
+                <div className="overflow-hidden rounded-md border border-gray-15 bg-white">
+                  <div className="grid grid-cols-7 border-b border-gray-15 bg-gray-5 text-xs font-semibold text-gray-60">
+                    {WEEKDAYS.map((w, i) => (
+                      <div key={w} className="px-2 py-1">
+                        {scale === 'Week' ? `${w} ${Number(weeks[0][i].slice(8))}` : w}
+                      </div>
+                    ))}
+                  </div>
+                  {weeks.map((week) => (
+                    <div key={week[0]} className="grid grid-cols-7 border-b border-gray-15 last:border-b-0">
+                      {week.map((iso) => (
+                        <DayCell
+                          key={iso}
+                          iso={iso}
+                          items={itemsForDay(iso)}
+                          // Week view has no "outside the month" concept.
+                          muted={scale === 'Month' && iso.slice(0, 7) !== anchorMonth}
+                          cap={expandAll ? Infinity : scale === 'Week' ? 8 : 2}
+                          tall={scale === 'Week'}
+                          onOpen={openEdit}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
