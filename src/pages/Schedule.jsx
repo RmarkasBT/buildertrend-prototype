@@ -7,6 +7,7 @@ import ScheduleItemModal from '../components/ScheduleItemModal'
 import AssistantPanel from '../components/AssistantPanel'
 import GanttChart from '../components/GanttChart'
 import WorkdayExceptions from '../components/WorkdayExceptions'
+import BaselineView from '../components/BaselineView'
 import * as workdayApi from '../api/workdayApi'
 import { buildWorkCalendar } from '../lib/workCalendar'
 
@@ -106,7 +107,9 @@ export default function Schedule() {
         ))}
       </div>
 
-      {tab === 'Workday Exceptions' ? (
+      {tab === 'Baseline' ? (
+        <BaselineView jobId={currentJob.id} />
+      ) : tab === 'Workday Exceptions' ? (
         <WorkdayExceptions
           jobId={currentJob.id}
           onChanged={() => { loadCalendar(); refresh() }}

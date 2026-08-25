@@ -377,6 +377,51 @@ paths:
         '400':
           $ref: '#/components/responses/MissingJobId'
 
+  /api/baselines:
+    get:
+      operationId: getScheduleBaseline
+      tags: [Schedule]
+      summary: How the schedule compares to the plan that was agreed.
+      description: |
+        The baseline is a frozen copy of the schedule from when the plan was
+        agreed. This returns it plus a LIVE comparison against today's dates —
+        which is how to answer "are we behind schedule, and where".
+
+        Read this before making claims about being ahead or behind. Comparing
+        current dates against your own sense of the plan is guesswork; this is
+        the recorded plan.
+
+        `summary.projectEnd.slip` is the number that matters: calendar days the
+        finish has moved, POSITIVE meaning later than planned. `summary.worst`
+        points at the single item that has slipped furthest, which is usually
+        what to talk about first.
+
+        Per-item, `status` is judged on the FINISH, not the start — an item that
+        started late but finished on time has cost the project nothing, and one
+        that started on time but ran long has. `startSlip`/`endSlip` are
+        calendar days; `durationDelta` is working days.
+
+        Two statuses have no slip to report and should be described as scope
+        change rather than delay: `added` (created after the baseline — this is
+        how scope creep shows up) and `removed` (was in the plan, since
+        deleted).
+
+        `baseline: null` means none has been set yet. That is a normal state,
+        not an error — say so rather than inferring drift from nothing. Setting
+        one is a deliberate decision made on the Schedule page's Baseline tab,
+        and there is no tool for it.
+      parameters:
+        - $ref: '#/components/parameters/JobIdQuery'
+      responses:
+        '200':
+          description: The active baseline and a live comparison against it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaselineComparison'
+        '400':
+          $ref: '#/components/responses/MissingJobId'
+
   /api/estimate:
     get:
       operationId: getEstimate
@@ -1398,6 +1443,79 @@ components:
                 description: Work days this can slip before any successor moves.
               critical: { type: boolean }
       required: [ok, changes, conflicts, warnings, counts, projectEnd, criticalIds]
+
+    BaselineComparison:
+      type: object
+      properties:
+        baseline:
+          type: object
+          description: Null when no baseline has been set for this job.
+          properties:
+            id: { type: string }
+            jobId: { type: string }
+            name: { type: string }
+            projectEnd:
+              type: string
+              format: date
+              description: The project finish at the moment the baseline was captured.
+            itemCount: { type: integer }
+            createdBy: { type: string }
+            createdAt: { type: string, format: date-time }
+        rows:
+          type: array
+          description: One row per item, in date order. Empty when no baseline is set.
+          items:
+            type: object
+            properties:
+              itemId: { type: string }
+              title: { type: string }
+              status:
+                type: string
+                enum: [behind, ahead, on_plan, added, removed]
+              baseline:
+                type: object
+                description: Planned dates. Null for an item added after the baseline.
+                properties:
+                  start: { type: string, format: date }
+                  end: { type: string, format: date }
+                  workDays: { type: integer }
+              current:
+                type: object
+                description: Today's dates. Null for an item deleted since the baseline.
+                properties:
+                  start: { type: string, format: date }
+                  end: { type: string, format: date }
+                  workDays: { type: integer }
+              startSlip:
+                type: integer
+                description: Calendar days the start has moved; positive is late.
+              endSlip:
+                type: integer
+                description: Calendar days the finish has moved; positive is late.
+              durationDelta:
+                type: integer
+                description: Change in duration, in WORKING days; positive means it now takes longer.
+        summary:
+          type: object
+          description: Null when no baseline is set.
+          properties:
+            behind: { type: integer }
+            ahead: { type: integer }
+            onPlan: { type: integer }
+            added: { type: integer }
+            removed: { type: integer }
+            projectEnd:
+              type: object
+              properties:
+                baseline: { type: string, format: date }
+                current: { type: string, format: date }
+                slip:
+                  type: integer
+                  description: Calendar days the finish has moved. The headline number.
+            worst:
+              type: object
+              description: The item that has slipped furthest, or null if nothing has.
+      required: [baseline, rows, summary]
 
     WorkdayException:
       type: object

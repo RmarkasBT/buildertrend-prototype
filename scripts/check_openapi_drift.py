@@ -322,6 +322,17 @@ def check_routes(spec: dict) -> None:
         if not (r[0].startswith("/api/workday-exceptions") and r not in spec_ops)
     }
 
+    # Baselines: the comparison is documented, the writes are not. Setting a
+    # baseline declares "this is the plan we agreed" — and because the newest
+    # snapshot is the active one, an agent setting one would silently re-baseline
+    # and make every existing slip disappear. No data is lost, but the meaning of
+    # the record is, which is worse. Deleting has the same problem. /history is
+    # just token cost.
+    impl = {
+        r for r in impl
+        if not (r[0].startswith("/api/baselines") and r not in spec_ops)
+    }
+
     undocumented = impl - spec_ops
     if undocumented:
         fail(

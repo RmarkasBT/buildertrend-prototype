@@ -140,6 +140,42 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_workday_exceptions_job_id
     ON workday_exceptions(job_id);
 
+  -- Baseline ---------------------------------------------------------------
+  -- A frozen copy of the schedule as it stood when the plan was agreed, so
+  -- "are we ahead or behind, and where" has something to measure against.
+  -- Observed as a real tab on the Schedule page; BT describes the payoff as
+  -- expected vs. actual start dates, durations, and the slips between them.
+  --
+  -- Re-setting a baseline inserts a NEW row rather than overwriting: the
+  -- previous plan is the record of what was agreed at the time, and quietly
+  -- replacing it would erase exactly the history the feature exists to show.
+  -- The newest row per job is the active one.
+  CREATE TABLE IF NOT EXISTS schedule_baselines (
+    id          TEXT PRIMARY KEY,
+    job_id      TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    -- The project finish at the moment of capture, so the headline comparison
+    -- doesn't depend on re-deriving it from the snapshot rows.
+    project_end TEXT NOT NULL DEFAULT '',
+    item_count  INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_schedule_baselines_job_id
+    ON schedule_baselines(job_id);
+
+  -- Title is copied, not joined, so a baseline still reads correctly after an
+  -- item is renamed or deleted — which is the case that matters most.
+  CREATE TABLE IF NOT EXISTS schedule_baseline_items (
+    baseline_id TEXT NOT NULL,
+    item_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    start_date  TEXT NOT NULL,
+    end_date    TEXT NOT NULL,
+    work_days   INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (baseline_id, item_id)
+  );
+
   CREATE TABLE IF NOT EXISTS schedule_change_items (
     change_set_id TEXT NOT NULL,
     item_id       TEXT NOT NULL,
@@ -163,6 +199,7 @@ for (const [key, start] of [
   ['next_estimate_item_id', '100'],
   ['next_change_set_id', '100'],
   ['next_workday_exception_id', '100'],
+  ['next_baseline_id', '100'],
 ]) {
   db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`).run(key, start)
 }
@@ -683,4 +720,33 @@ export function exceptionToRow(exc) {
 
 export function nextExceptionId() {
   return reserveIds('next_workday_exception_id', 'wx', 1)[0]
+}
+
+// DB row <-> wire shape for baselines.
+export function rowToBaseline(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    name: row.name,
+    projectEnd: row.project_end,
+    itemCount: row.item_count,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+  }
+}
+
+export function rowToBaselineItem(row) {
+  if (!row) return null
+  return {
+    itemId: row.item_id,
+    title: row.title,
+    start: row.start_date,
+    end: row.end_date,
+    workDays: row.work_days,
+  }
+}
+
+export function nextBaselineId() {
+  return reserveIds('next_baseline_id', 'bl', 1)[0]
 }

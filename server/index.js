@@ -17,6 +17,7 @@ import * as dailyLogs from './dailyLogRoutes.js'
 import { jobIdError } from './jobs.js'
 import { applyBatch, undoChangeSet, getChangeSet, listChangeSets } from './changeSets.js'
 import * as workdays from './workdayRoutes.js'
+import * as baselines from './baselineRoutes.js'
 import { cascade, analyze } from '../src/lib/cascade.js'
 import { isISODate, todayIso } from '../src/lib/dates.js'
 import { validateDailyLogBody, validateEstimateItemBody } from './validate.js'
@@ -90,6 +91,7 @@ const CHANGE_SET_ID_ROUTE = /^\/api\/change-sets\/([^/]+)$/
 // /calendar is a fixed sub-path and is matched before this, same rule as the
 // rest of the file.
 const WORKDAY_EXCEPTION_ROUTE = /^\/api\/workday-exceptions\/([^/]+)$/
+const BASELINE_ID_ROUTE = /^\/api\/baselines\/([^/]+)$/
 const ESTIMATE_GROUP_ROUTE = /^\/api\/estimate\/groups\/([^/]+)$/
 const ESTIMATE_ITEM_ROUTE = /^\/api\/estimate\/items\/([^/]+)$/
 const ESTIMATE_ITEM_DUPLICATE_ROUTE = /^\/api\/estimate\/items\/([^/]+)\/duplicate$/
@@ -297,6 +299,41 @@ const server = createServer(async (req, res) => {
     if (wxMatch && req.method === 'DELETE') {
       if (!workdays.deleteException(wxMatch[1])) {
         return send(res, 404, { error: 'workday exception not found' })
+      }
+      return send(res, 204)
+    }
+
+    // --- Baseline -------------------------------------------------------
+    if (pathname === '/api/baselines' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      // The active baseline plus a live comparison. `baseline: null` when none
+      // has been set — a normal state, not an error.
+      return send(res, 200, baselines.getComparison(jobId))
+    }
+
+    if (pathname === '/api/baselines/history' && req.method === 'GET') {
+      const jobId = searchParams.get('jobId')
+      const badJob = jobIdError(jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      return send(res, 200, baselines.listBaselines(jobId))
+    }
+
+    if (pathname === '/api/baselines' && req.method === 'POST') {
+      const body = await readBody(req)
+      const badJob = jobIdError(body.jobId)
+      if (badJob) return send(res, 400, { error: badJob })
+      if (body.name !== undefined && typeof body.name !== 'string') {
+        return send(res, 400, { error: 'name must be a string' })
+      }
+      return send(res, 201, baselines.setBaseline(body.jobId, body.name))
+    }
+
+    const baselineMatch = pathname.match(BASELINE_ID_ROUTE)
+    if (baselineMatch && req.method === 'DELETE') {
+      if (!baselines.clearBaseline(baselineMatch[1])) {
+        return send(res, 404, { error: 'baseline not found' })
       }
       return send(res, 204)
     }
