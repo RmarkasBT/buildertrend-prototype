@@ -84,6 +84,11 @@ export function validateException(body, { partial = false } = {}) {
   if (body.category !== undefined && typeof body.category !== 'string') {
     return 'category must be a string'
   }
+  // Required in BT's own form (red asterisk), and it's what makes a list of
+  // exceptions scannable once there are more than a handful.
+  if (need('category') && !String(body.category || '').trim()) {
+    return 'category is required'
+  }
   // '' is legal and means "every job" — a public holiday. Anything else has to
   // name a real job, or the exception silently affects nothing.
   if (body.jobId !== undefined && body.jobId !== '' && !jobs.some((j) => j.id === body.jobId)) {

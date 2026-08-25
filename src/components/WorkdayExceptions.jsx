@@ -11,6 +11,24 @@ import { IconTrash } from './icons'
 // This is not cosmetic — an exception feeds the job's working calendar, which
 // the cascade engine uses, so adding a holiday here genuinely moves dates.
 
+// Label-left row, matching BT's form layout.
+function Field({ label, required, info, children }) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-4">
+      <div className="shrink-0 pt-1.5 text-sm text-gray-80 sm:w-40">
+        {label}
+        {required && <span className="ml-0.5 text-danger-fg">*</span>}
+        {info && <span className="ml-1 text-xs text-gray-40" title="More info">&#9432;</span>}
+      </div>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  )
+}
+
+// BT's Category is a managed list with Add/Edit, not free text — so it starts
+// from a seeded set and grows, rather than accepting anything typed.
+const DEFAULT_CATEGORIES = ['State Holiday', 'Company Holiday', 'Weather', 'Catch-up']
+
 const BLANK = {
   title: '',
   type: 'non_workday',
@@ -18,7 +36,7 @@ const BLANK = {
   end: '',
   sameEveryYear: false,
   category: '',
-  applyToAll: false,
+  applyToAll: true,
 }
 
 export default function WorkdayExceptions({ jobId, onChanged }) {
@@ -27,6 +45,9 @@ export default function WorkdayExceptions({ jobId, onChanged }) {
   const [error, setError] = useState(null)
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState(BLANK)
+  const [addingCategory, setAddingCategory] = useState(false)
+  const [newCategory, setNewCategory] = useState('')
+  const [extraCategories, setExtraCategories] = useState([])
 
   const refresh = useCallback(() => {
     if (!jobId) return
@@ -42,6 +63,18 @@ export default function WorkdayExceptions({ jobId, onChanged }) {
   useEffect(() => { refresh() }, [refresh])
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  // Seeded categories, plus any already in use on this job, plus newly added.
+  const categories = [...new Set([...DEFAULT_CATEGORIES, ...rows.map((r) => r.category).filter(Boolean), ...extraCategories])]
+
+  const commitCategory = () => {
+    const v = newCategory.trim()
+    if (!v) return
+    setExtraCategories((c) => [...c, v])
+    set('category', v)
+    setNewCategory('')
+    setAddingCategory(false)
+  }
 
   const startAdd = () => {
     const today = todayIso()
@@ -92,78 +125,139 @@ export default function WorkdayExceptions({ jobId, onChanged }) {
       )}
 
       {adding && (
-        <div className="mt-3 rounded-md border border-gray-15 bg-white p-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="text-xs font-semibold text-gray-60">
-              Title
+        <div className="mt-3 rounded-md border border-gray-15 bg-white p-4">
+          {/* Layout and controls follow BT's own "Add Workday Exception" screen:
+              labels to the LEFT of their field, Type and Apply-To as radio
+              groups rather than a select and a checkbox, one "Start and end"
+              label spanning two date inputs, and Category as a required
+              managed list with an Add affordance. */}
+          <div className="text-lg font-bold text-gray-90">Add Workday Exception</div>
+
+          <div className="mt-4 space-y-3">
+            <Field label="Title" required>
               <input
                 value={form.title}
                 onChange={(e) => set('title', e.target.value)}
-                placeholder="Thanksgiving"
-                className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm font-normal text-gray-90"
+                placeholder="4th of July"
+                className="w-full max-w-sm rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
               />
-            </label>
-            <label className="text-xs font-semibold text-gray-60">
-              Type
-              <select
-                value={form.type}
-                onChange={(e) => set('type', e.target.value)}
-                className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm font-normal text-gray-90"
-              >
-                <option value="non_workday">Non Workday — block a working day</option>
-                <option value="extra_workday">Extra Workday — open a day off</option>
-              </select>
-            </label>
-            <label className="text-xs font-semibold text-gray-60">
-              Category
-              <input
-                value={form.category}
-                onChange={(e) => set('category', e.target.value)}
-                placeholder="Holiday"
-                className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm font-normal text-gray-90"
-              />
-            </label>
-            <label className="text-xs font-semibold text-gray-60">
-              Start
-              <input
-                type="date"
-                value={form.start}
-                onChange={(e) => set('start', e.target.value)}
-                className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm font-normal text-gray-90"
-              />
-            </label>
-            <label className="text-xs font-semibold text-gray-60">
-              End
-              <input
-                type="date"
-                value={form.end}
-                onChange={(e) => set('end', e.target.value)}
-                className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm font-normal text-gray-90"
-              />
-            </label>
-            <div className="flex flex-col justify-end gap-1.5 text-sm text-gray-80">
-              <label className="flex items-center gap-2">
+            </Field>
+
+            <Field label="Type" info>
+              <div className="space-y-1">
+                {[
+                  ['non_workday', 'Non Workday', 'Blocks a day that normally works, like a holiday.'],
+                  ['extra_workday', 'Extra Workday', 'Opens a day that normally does not, like a Saturday.'],
+                ].map(([value, label, hint]) => (
+                  <label key={value} className="flex items-start gap-2 text-sm text-gray-80">
+                    <input
+                      type="radio"
+                      name="wx-type"
+                      checked={form.type === value}
+                      onChange={() => set('type', value)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      {label}
+                      <span className="block text-xs text-gray-50">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="Start and end" required>
+              <div className="flex flex-wrap items-center gap-2">
                 <input
-                  type="checkbox"
-                  checked={form.sameEveryYear}
-                  onChange={(e) => set('sameEveryYear', e.target.checked)}
+                  type="date"
+                  value={form.start}
+                  onChange={(e) => set('start', e.target.value)}
+                  className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
                 />
-                Same Every Year
-              </label>
-              <label className="flex items-center gap-2">
                 <input
-                  type="checkbox"
-                  checked={form.applyToAll}
-                  onChange={(e) => set('applyToAll', e.target.checked)}
+                  type="date"
+                  value={form.end}
+                  onChange={(e) => set('end', e.target.value)}
+                  className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
                 />
-                Apply to all jobs
-              </label>
-            </div>
+              </div>
+            </Field>
+
+            <Field label="Same Every Year">
+              <input
+                type="checkbox"
+                checked={form.sameEveryYear}
+                onChange={(e) => set('sameEveryYear', e.target.checked)}
+              />
+            </Field>
+
+            <Field label="Category" required>
+              <div className="flex flex-wrap items-center gap-2">
+                {addingCategory ? (
+                  <>
+                    <input
+                      autoFocus
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="New category"
+                      className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+                    />
+                    <button
+                      onClick={commitCategory}
+                      className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm text-gray-70"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => { setAddingCategory(false); setNewCategory('') }}
+                      className="text-sm text-gray-50 underline"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <select
+                      value={form.category}
+                      onChange={(e) => set('category', e.target.value)}
+                      className="min-w-48 rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+                    >
+                      <option value="">Select a category…</option>
+                      {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <button
+                      onClick={() => setAddingCategory(true)}
+                      className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm text-gray-70"
+                    >
+                      Add
+                    </button>
+                  </>
+                )}
+              </div>
+            </Field>
+
+            <Field label="Apply Exception To">
+              <div className="space-y-1">
+                {[[true, 'All Jobs'], [false, 'Specific Jobs']].map(([val, label]) => (
+                  <label key={String(val)} className="flex items-center gap-2 text-sm text-gray-80">
+                    <input
+                      type="radio"
+                      name="wx-apply"
+                      checked={form.applyToAll === val}
+                      onChange={() => set('applyToAll', val)}
+                    />
+                    {label}
+                    {val === false && <span className="text-xs text-gray-50">(this job)</span>}
+                  </label>
+                ))}
+              </div>
+            </Field>
           </div>
-          <div className="mt-3 flex gap-2">
+
+          <div className="mt-4 flex gap-2 border-t border-gray-15 pt-3">
             <button
               onClick={save}
-              className="rounded-sm bg-brand-blue px-3 py-1.5 text-sm font-semibold text-white"
+              className="rounded-sm bg-brand-blue px-4 py-1.5 text-sm font-semibold text-white"
             >
               Save
             </button>
