@@ -9,6 +9,7 @@ import GanttChart from '../components/GanttChart'
 import WorkdayExceptions from '../components/WorkdayExceptions'
 import BaselineView from '../components/BaselineView'
 import * as workdayApi from '../api/workdayApi'
+import * as baselineApi from '../api/baselineApi'
 import { buildWorkCalendar } from '../lib/workCalendar'
 import { findConflicts } from '../lib/conflicts'
 import { subsVendors } from '../data/subsVendors'
@@ -54,6 +55,7 @@ export default function Schedule() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   // BT offers the Phases grouping on the List view as well as the Gantt.
   const [listPhases, setListPhases] = useState(false)
+  const [online, setOnline] = useState(false)
   // The job's working calendar, fetched so the browser derives dates the same
   // way the server does — otherwise the Gantt shades a hardcoded Mon-Fri while
   // the API cascades around real holidays.
@@ -66,6 +68,17 @@ export default function Schedule() {
       .catch(() => {})
   }, [currentJob?.id])
   useEffect(() => { loadCalendar() }, [loadCalendar])
+
+  // Baseline rows for the Gantt's Baseline toggle. Null until fetched; an
+  // absent baseline is a normal state, so failures are silent.
+  const [baselineRows, setBaselineRows] = useState([])
+  useEffect(() => {
+    if (!currentJob?.id) return
+    baselineApi
+      .getBaseline(currentJob.id)
+      .then((d) => setBaselineRows((d.rows || []).filter((r) => r.baseline).map((r) => ({ itemId: r.itemId, ...r.baseline }))))
+      .catch(() => setBaselineRows([]))
+  }, [currentJob?.id, items])
 
   const base = new Date(2026, 7, 1) // August 2026, matching the captured screenshot
   const cursor = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1)
@@ -156,9 +169,11 @@ export default function Schedule() {
         <div className="mt-6 text-sm text-gray-50">No {tab.toLowerCase()} data yet.</div>
       ) : (
         <>
-          <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
-            Your schedule is offline and is unavailable to subs and clients. Notifications will not be sent.
-          </div>
+          {!online && (
+            <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
+              Your schedule is offline and is unavailable to subs and clients. Notifications will not be sent.
+            </div>
+          )}
 
           <div className="mt-3 flex items-center justify-between">
             <div className="flex gap-1 rounded-sm border border-gray-20 text-sm">
@@ -175,8 +190,19 @@ export default function Schedule() {
             <div className="flex items-center gap-2 text-sm">
               <button className="rounded-sm border border-gray-20 px-2 py-1" title="Settings">⚙</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1" title="History">↺</button>
-              <label className="flex items-center gap-1 text-gray-70">
-                <input type="checkbox" defaultChecked readOnly /> Schedule Offline
+              {/* BT frames this positively as a "Schedule Online" toggle, not a
+                  negative "Schedule Offline" checkbox. */}
+              <label className="flex cursor-pointer items-center gap-2 text-gray-70">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={online}
+                  onClick={() => setOnline((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${online ? 'bg-brand-blue' : 'bg-gray-25'}`}
+                >
+                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${online ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                </button>
+                Schedule Online
               </label>
               <button className="rounded-sm border border-gray-20 px-2 py-1">More Actions ▾</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1">▽ Filter</button>
@@ -187,7 +213,7 @@ export default function Schedule() {
                 ✨ AI Assistant
               </button>
               <button onClick={openCreate} className="rounded-sm bg-brand-blue px-3 py-1 font-semibold text-white">
-                + New Schedule Item
+                New Schedule Item
               </button>
             </div>
           </div>
@@ -415,7 +441,7 @@ export default function Schedule() {
               {items.length === 0 ? (
                 <div className="rounded-md border border-gray-15 bg-white py-6 text-center text-sm text-gray-50">No schedule items yet.</div>
               ) : (
-                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} onApplyChanges={applyChanges} calendar={calendar} />
+                <GanttChart items={items} onUpdateItem={save} onCreateItem={openCreate} onApplyChanges={applyChanges} calendar={calendar} baseline={baselineRows} />
               )}
             </div>
           )}

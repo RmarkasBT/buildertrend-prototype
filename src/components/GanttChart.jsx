@@ -60,10 +60,11 @@ function ToggleSwitch({ checked, onChange, label }) {
   )
 }
 
-export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges, calendar }) {
+export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges, calendar, baseline }) {
   const [zoom, setZoom] = useState('Day')
   const [groupByPhase, setGroupByPhase] = useState(false)
   const [showCritical, setShowCritical] = useState(false)
+  const [showBaseline, setShowBaseline] = useState(false)
   const [collapsed, setCollapsed] = useState(() => new Set())
   const [selectedId, setSelectedId] = useState(null)
   const [editingId, setEditingId] = useState(null)
@@ -150,6 +151,11 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     }
     return out
   }, [items, phaseGroups, collapsed, groupByPhase])
+
+  const baselineById = useMemo(
+    () => new Map((baseline || []).map((b) => [b.itemId, b])),
+    [baseline],
+  )
 
   const criticalIds = useMemo(() => (showCritical ? computeCriticalIds(items) : new Set()), [items, showCritical])
 
@@ -400,6 +406,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
         <div className="flex items-center gap-4">
           <ToggleSwitch checked={groupByPhase} onChange={setGroupByPhase} label="Phases" />
           <ToggleSwitch checked={showCritical} onChange={setShowCritical} label="Critical Path" />
+          <ToggleSwitch checked={showBaseline} onChange={setShowBaseline} label="Baseline" />
           <div className="flex items-center gap-1 text-gray-50">
             <button title="Column settings" className="rounded-sm p-1.5 hover:bg-gray-10"><IconSliders className="h-4 w-4" /></button>
             <button title="Share" className="rounded-sm p-1.5 hover:bg-gray-10"><IconShare className="h-4 w-4" /></button>
@@ -517,10 +524,11 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
                         className={`flex shrink-0 flex-col items-center justify-center gap-0.5 border-r border-gray-15 ${off ? 'bg-gray-5' : ''}`}
                         style={{ width: dayWidth }}
                       >
-                        <div>{WEEKDAY_ABBR[w]}</div>
+                        {/* Number above weekday, the order BT uses. */}
                         <div className={`font-medium tabular-nums ${why?.title ? 'text-warning-fg' : 'text-gray-70'}`}>
                           {parseISODate(iso).getDate()}
                         </div>
+                        <div>{WEEKDAY_ABBR[w]}</div>
                       </div>
                     )
                   })}
@@ -644,17 +652,39 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
               // the toggle readable — outlining alone leaves every bar its
               // normal colour and the eye can't separate them.
               const dimmed = showCritical && !critical
+              // With Baseline on, draw where the item was originally planned as a
+              // thin bar beneath the live one, so drift is visible in place
+              // rather than only as a number on the Baseline tab.
+              const base = showBaseline ? baselineById.get(item.id) : null
               return (
                 <div key={item.id} data-row-id={item.id} className="relative border-b border-gray-15" style={{ height: ROW_H }}>
+                  {base && (
+                    <div
+                      title={`Baseline: ${fmtDate(base.start)} – ${fmtDate(base.end)}`}
+                      className="absolute"
+                      style={{
+                        left: xOf(base.start),
+                        width: Math.max(xOf(base.end) + dayWidth - xOf(base.start), dayWidth),
+                        top: ROW_H - 7,
+                        height: 4,
+                        backgroundColor: '#8f9ba8',
+                      }}
+                    />
+                  )}
                   <div
                     onMouseDown={(e) => onBarMouseDown(e, item, 'move')}
-                    className="absolute top-1.5 flex cursor-grab items-center rounded-sm text-xs font-medium text-white active:cursor-grabbing"
+                    className="absolute top-1.5 flex cursor-grab items-center text-xs font-medium text-white active:cursor-grabbing"
                     style={{
                       left,
                       width,
                       height: ROW_H - 12,
-                      backgroundColor: dimmed ? '#b8bfcc' : colorHex(item.color),
-                      outline: critical ? '2px solid #0763fb' : selected ? '2px solid #0763fb' : 'none',
+                      // Verified against BT's published Gantt screenshots: with
+                      // Critical Path on, critical bars are FILLED solid blue and
+                      // everything else solid grey — not the item's own colour
+                      // with a blue outline. The help text says "outlined in
+                      // blue", which is what misled the first attempt.
+                      backgroundColor: critical ? '#1552cc' : dimmed ? '#b4b9c2' : colorHex(item.color),
+                      outline: selected ? '2px solid #0763fb' : 'none',
                       outlineOffset: 1,
                     }}
                   >
