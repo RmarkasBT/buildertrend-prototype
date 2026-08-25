@@ -213,6 +213,10 @@ const server = createServer(async (req, res) => {
         origin: body.origin,
         originRef: body.originRef,
         reason: body.reason,
+        shiftNotes: body.shiftNotes,
+        notifyAssignees: body.notifyAssignees,
+        notifyLinked: body.notifyLinked,
+        requestConfirmation: body.requestConfirmation,
       })
 
       if (result.error === 'unknown_item') {

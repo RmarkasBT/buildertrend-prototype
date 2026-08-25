@@ -30,10 +30,14 @@ const CURRENT_USER = 'Ruhaab Markas'
 
 const insertSet = db.prepare(`
   INSERT INTO schedule_change_sets (
-    id, job_id, origin, origin_ref, reason, direct_count, cascade_count,
+    id, job_id, origin, origin_ref, reason, shift_notes,
+    notify_assignees, notify_linked, request_confirmation,
+    direct_count, cascade_count,
     project_end_before, project_end_after, undone_by, created_by, created_at
   ) VALUES (
-    @id, @job_id, @origin, @origin_ref, @reason, @direct_count, @cascade_count,
+    @id, @job_id, @origin, @origin_ref, @reason, @shift_notes,
+    @notify_assignees, @notify_linked, @request_confirmation,
+    @direct_count, @cascade_count,
     @project_end_before, @project_end_after, '', @created_by, @created_at
   )
 `)
@@ -117,6 +121,10 @@ export function applyBatch(jobId, requests, opts = {}) {
       origin: opts.origin || 'batch',
       origin_ref: opts.originRef || '',
       reason: opts.reason || '',
+      shift_notes: opts.shiftNotes || '',
+      notify_assignees: opts.notifyAssignees ? 1 : 0,
+      notify_linked: opts.notifyLinked ? 1 : 0,
+      request_confirmation: opts.requestConfirmation ? 1 : 0,
       direct_count: plan.counts.direct,
       cascade_count: plan.counts.cascade,
       project_end_before: plan.projectEnd.before,
@@ -194,6 +202,10 @@ export function undoChangeSet(id, { force = false } = {}) {
       origin: 'undo',
       origin_ref: set.id,
       reason: `Undo of ${set.id}`,
+      shift_notes: '',
+      notify_assignees: 0,
+      notify_linked: 0,
+      request_confirmation: 0,
       direct_count: restorable.filter((r) => r.role === 'direct').length,
       cascade_count: restorable.filter((r) => r.role === 'cascade').length,
       project_end_before: set.projectEnd.after,
@@ -225,7 +237,7 @@ export { rowToItem }
 export function listShiftsForItem(itemId) {
   const rows = db
     .prepare(
-      `SELECT ci.*, cs.id AS set_id, cs.origin, cs.reason, cs.created_by, cs.created_at,
+      `SELECT ci.*, cs.id AS set_id, cs.origin, cs.reason, cs.shift_notes, cs.created_by, cs.created_at,
               cs.undone_by, cs.direct_count, cs.cascade_count
          FROM schedule_change_items ci
          JOIN schedule_change_sets cs ON cs.id = ci.change_set_id
@@ -246,6 +258,7 @@ export function listShiftsForItem(itemId) {
       role: r.role,
       origin: r.origin,
       reason: r.reason,
+      shiftNotes: r.shift_notes ?? '',
       from: { start: prior.start ?? '', end: prior.end ?? '', workDays: prior.workDays ?? null },
       to: { start: next.start ?? '', end: next.end ?? '', workDays: next.workDays ?? null },
       undone: Boolean(r.undone_by),

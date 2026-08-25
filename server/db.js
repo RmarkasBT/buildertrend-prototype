@@ -103,6 +103,15 @@ db.exec(`
     -- without re-running CPM over a schedule that has since moved on.
     project_end_before TEXT NOT NULL DEFAULT '',
     project_end_after  TEXT NOT NULL DEFAULT '',
+    -- BT's "Notify Users" dialog splits these: Shift Reason is a managed
+    -- dropdown (stored in the reason column) and Shift Notes is free text.
+    -- Conflating them loses the ability to group shifts by cause.
+    -- NB: no backticks in this comment — the whole DDL is a JS template
+    -- literal, so one would end the string and break the file.
+    shift_notes   TEXT NOT NULL DEFAULT '',
+    notify_assignees INTEGER NOT NULL DEFAULT 0,
+    notify_linked    INTEGER NOT NULL DEFAULT 0,
+    request_confirmation INTEGER NOT NULL DEFAULT 0,
     -- Points at the 'undo' change set that reverted this one. Undo is itself
     -- recorded as a change set, so it is auditable and non-destructive.
     undone_by     TEXT NOT NULL DEFAULT '',
@@ -432,6 +441,20 @@ export function nextChangeSetId() {
   return reserveIds('next_change_set_id', 'cs', 1)[0]
 }
 
+// Added after schedule_change_sets already existed in some dev DBs.
+for (const [col, def] of [
+  ['shift_notes', "TEXT NOT NULL DEFAULT ''"],
+  ['notify_assignees', 'INTEGER NOT NULL DEFAULT 0'],
+  ['notify_linked', 'INTEGER NOT NULL DEFAULT 0'],
+  ['request_confirmation', 'INTEGER NOT NULL DEFAULT 0'],
+]) {
+  try {
+    db.exec(`ALTER TABLE schedule_change_sets ADD COLUMN ${col} ${def}`)
+  } catch (err) {
+    if (!String(err.message).includes('duplicate column name')) throw err
+  }
+}
+
 // DB row <-> wire shape for change sets and their per-item snapshots.
 export function rowToChangeSet(row) {
   if (!row) return null
@@ -441,6 +464,10 @@ export function rowToChangeSet(row) {
     origin: row.origin,
     originRef: row.origin_ref,
     reason: row.reason,
+    shiftNotes: row.shift_notes ?? '',
+    notifyAssignees: Boolean(row.notify_assignees),
+    notifyLinked: Boolean(row.notify_linked),
+    requestConfirmation: Boolean(row.request_confirmation),
     counts: { direct: row.direct_count, cascade: row.cascade_count },
     projectEnd: { before: row.project_end_before, after: row.project_end_after },
     undoneBy: row.undone_by,

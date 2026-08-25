@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
+import Modal from './Modal'
 import { colorHex } from '../data/scheduleColors'
 import {
   addDays,
@@ -60,6 +61,149 @@ function ToggleSwitch({ checked, onChange, label }) {
   )
 }
 
+// BT's "Notify Users" dialog, which is what a schedule adjustment actually
+// opens. Three sections in this order: Notifications, Confirmations, Shifts —
+// and Shift Reason is a MANAGED DROPDOWN with an Add control, with Shift Notes
+// as separate free text. An earlier pass conflated the two into one text box,
+// which loses the ability to group shifts by cause.
+const SHIFT_REASONS = [
+  'Delayed product delivery',
+  'Weather',
+  'Sub unavailable',
+  'Inspection failed',
+  'Change order',
+  'Crew shortage',
+]
+
+function ShiftDialog({ item, targetStart, onCancel, onSave }) {
+  const [reason, setReason] = useState('')
+  const [notes, setNotes] = useState('')
+  const [notifyAssignees, setNotifyAssignees] = useState(true)
+  const [notifyLinked, setNotifyLinked] = useState(false)
+  const [requestConfirmation, setRequestConfirmation] = useState(false)
+  const [addingReason, setAddingReason] = useState(false)
+  const [newReason, setNewReason] = useState('')
+  const [extraReasons, setExtraReasons] = useState([])
+
+  const reasons = [...new Set([...SHIFT_REASONS, ...extraReasons])]
+  const assignee = String(item.assignees || '').trim()
+
+  return (
+    <Modal
+      title="Notify Users"
+      onClose={onCancel}
+      footer={
+        <div className="flex w-full justify-end gap-2">
+          <button onClick={onCancel} className="rounded-sm border border-gray-20 px-3 py-1.5 text-sm text-gray-70">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave({ reason, notes, notifyAssignees, notifyLinked, requestConfirmation })}
+            className="rounded-sm bg-brand-blue px-4 py-1.5 text-sm font-semibold text-white"
+          >
+            Save
+          </button>
+        </div>
+      }
+    >
+      <p className="text-sm text-gray-60">
+        Moving <span className="font-semibold text-gray-90">{item.title}</span> to {fmtDate(targetStart)}.
+      </p>
+
+      <section className="mt-3 rounded-md border border-gray-15">
+        <h4 className="border-b border-gray-15 px-3 py-2 text-sm font-semibold text-gray-90">Notifications</h4>
+        <div className="space-y-2 px-3 py-3">
+          <label className="flex items-center gap-2 text-sm text-gray-80">
+            <input type="checkbox" checked={notifyAssignees} onChange={(e) => setNotifyAssignees(e.target.checked)} />
+            Notify Existing Assignees
+          </label>
+          {assignee && (
+            <div className="ml-6 inline-flex items-center gap-2 rounded-sm border border-gray-20 px-2 py-1 text-xs text-gray-80">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-success-bg text-[10px] font-semibold text-success-fg">
+                {assignee.split(' ').slice(0, 2).map((w) => w[0]).join('')}
+              </span>
+              {assignee}
+            </div>
+          )}
+          <label className="flex items-start gap-2 text-sm text-gray-80">
+            <input type="checkbox" checked={notifyLinked} onChange={(e) => setNotifyLinked(e.target.checked)} className="mt-0.5" />
+            <span>
+              Notify assignees on linked Schedule Items and reset confirmations
+              <span className="ml-1 text-gray-40" title="Everything downstream of this item">&#9432;</span>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section className="mt-3 rounded-md border border-gray-15">
+        <h4 className="border-b border-gray-15 px-3 py-2 text-sm font-semibold text-gray-90">Confirmations</h4>
+        <div className="px-3 py-3">
+          <label className="flex items-center gap-2 text-sm text-gray-80">
+            <input type="checkbox" checked={requestConfirmation} onChange={(e) => setRequestConfirmation(e.target.checked)} />
+            Request confirmation from all assignees
+          </label>
+        </div>
+      </section>
+
+      <section className="mt-3 rounded-md border border-gray-15">
+        <h4 className="border-b border-gray-15 px-3 py-2 text-sm font-semibold text-gray-90">Shifts</h4>
+        <div className="space-y-3 px-3 py-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-70">Shift Reason</label>
+            {addingReason ? (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <input
+                  autoFocus
+                  value={newReason}
+                  onChange={(e) => setNewReason(e.target.value)}
+                  placeholder="New reason"
+                  className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+                />
+                <button
+                  onClick={() => {
+                    const v = newReason.trim()
+                    if (!v) return
+                    setExtraReasons((r) => [...r, v])
+                    setReason(v)
+                    setNewReason('')
+                    setAddingReason(false)
+                  }}
+                  className="rounded-sm border border-gray-20 px-2 py-1.5 text-sm text-gray-70"
+                >
+                  Save
+                </button>
+                <button onClick={() => setAddingReason(false)} className="text-sm text-gray-50 underline">Cancel</button>
+              </div>
+            ) : (
+              <div className="mt-1 flex items-center gap-2">
+                <select
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  className="min-w-0 flex-1 rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+                >
+                  <option value="">Select a reason…</option>
+                  {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <button onClick={() => setAddingReason(true)} className="shrink-0 text-sm font-semibold text-brand-blue">Add</button>
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-70">Shift Notes</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              placeholder="Lumber was not delivered on time, postponing our start date"
+              className="mt-1 w-full rounded-sm border border-gray-20 px-2 py-1.5 text-sm"
+            />
+          </div>
+        </div>
+      </section>
+    </Modal>
+  )
+}
+
 export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyChanges, calendar, baseline }) {
   const [zoom, setZoom] = useState('Day')
   const [groupByPhase, setGroupByPhase] = useState(false)
@@ -77,7 +221,6 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
   // "any adjustments made to schedule items will prompt you to ... log a Shift
   // Reason and Shift Notes for proper record keeping".
   const [pendingShift, setPendingShift] = useState(null)
-  const [shiftReason, setShiftReason] = useState('')
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
   const rowRefs = useRef(new Map())
@@ -255,8 +398,8 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
       if (onApplyChanges) {
         // Don't write yet — ask why first. The reason is what makes the Shifts
         // history worth reading later; a bare "Moved X" tells nobody anything.
+        // The dialog owns its own field state, so there's nothing to reset here.
         setPendingShift({ change, item, fallback: `${verb} ${item.title}` })
-        setShiftReason('')
       } else {
         const end = endFromWorkDays(change.start, change.workDays)
         onUpdateItem({ ...item, start: change.start, end, workDays: change.workDays })
@@ -315,16 +458,19 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     return m
   }, [rows])
 
-  const commitShift = () => {
+  const commitShift = (payload) => {
     if (!pendingShift) return
     onApplyChanges([pendingShift.change], {
       origin: 'gantt_drag',
       // Fall back to a plain description rather than blocking the drag — a
       // required field here would just train people to type "x".
-      reason: shiftReason.trim() || pendingShift.fallback,
+      reason: payload.reason || pendingShift.fallback,
+      shiftNotes: payload.notes,
+      notifyAssignees: payload.notifyAssignees,
+      notifyLinked: payload.notifyLinked,
+      requestConfirmation: payload.requestConfirmation,
     })
     setPendingShift(null)
-    setShiftReason('')
   }
 
   const removeLink = () => {
@@ -362,34 +508,12 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
         </div>
       )}
       {pendingShift && (
-        <div className="border-b border-gray-15 bg-info-bg px-3 py-2">
-          <div className="text-sm text-gray-80">
-            Moving <span className="font-semibold">{pendingShift.item.title}</span> to{' '}
-            {fmtDate(pendingShift.change.start)}. Why?
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              autoFocus
-              value={shiftReason}
-              onChange={(e) => setShiftReason(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') commitShift() }}
-              placeholder="Rain delay, sub unavailable, materials late…"
-              className="min-w-64 flex-1 rounded-sm border border-gray-20 px-2 py-1 text-sm"
-            />
-            <button
-              onClick={commitShift}
-              className="rounded-sm bg-brand-blue px-3 py-1 text-sm font-semibold text-white"
-            >
-              Save shift
-            </button>
-            <button
-              onClick={() => setPendingShift(null)}
-              className="rounded-sm border border-gray-20 px-3 py-1 text-sm text-gray-70"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <ShiftDialog
+          item={pendingShift.item}
+          targetStart={pendingShift.change.start}
+          onCancel={() => setPendingShift(null)}
+          onSave={commitShift}
+        />
       )}
       <div className="flex items-center justify-between border-b border-gray-15 px-3 py-2">
         <div className="flex items-center gap-2">
