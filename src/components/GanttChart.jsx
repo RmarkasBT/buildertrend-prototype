@@ -156,6 +156,7 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
     () => new Map((baseline || []).map((b) => [b.itemId, b])),
     [baseline],
   )
+  const hasBaseline = baselineById.size > 0
 
   const criticalIds = useMemo(() => (showCritical ? computeCriticalIds(items) : new Set()), [items, showCritical])
 
@@ -406,7 +407,9 @@ export default function GanttChart({ items, onUpdateItem, onCreateItem, onApplyC
         <div className="flex items-center gap-4">
           <ToggleSwitch checked={groupByPhase} onChange={setGroupByPhase} label="Phases" />
           <ToggleSwitch checked={showCritical} onChange={setShowCritical} label="Critical Path" />
-          <ToggleSwitch checked={showBaseline} onChange={setShowBaseline} label="Baseline" />
+          {hasBaseline && (
+            <ToggleSwitch checked={showBaseline} onChange={setShowBaseline} label="Baseline" />
+          )}
           <div className="flex items-center gap-1 text-gray-50">
             <button title="Column settings" className="rounded-sm p-1.5 hover:bg-gray-10"><IconSliders className="h-4 w-4" /></button>
             <button title="Share" className="rounded-sm p-1.5 hover:bg-gray-10"><IconShare className="h-4 w-4" /></button>

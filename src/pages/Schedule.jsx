@@ -175,7 +175,7 @@ export default function Schedule() {
             </div>
           )}
 
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex gap-1 rounded-sm border border-gray-20 text-sm">
               {['Calendar', 'List', 'Gantt'].map((v) => (
                 <button
@@ -187,11 +187,12 @@ export default function Schedule() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex flex-nowrap items-center gap-1.5 whitespace-nowrap text-sm">
               <button className="rounded-sm border border-gray-20 px-2 py-1" title="Settings">⚙</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1" title="History">↺</button>
-              {/* BT frames this positively as a "Schedule Online" toggle, not a
-                  negative "Schedule Offline" checkbox. */}
+              {/* A toggle whose LABEL reflects the current state, which is what
+                  BT's own screenshots show: "Schedule Offline" while off,
+                  "Schedule Online" once on. Not a fixed caption. */}
               <label className="flex cursor-pointer items-center gap-2 text-gray-70">
                 <button
                   type="button"
@@ -202,8 +203,9 @@ export default function Schedule() {
                 >
                   <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${online ? 'translate-x-4' : 'translate-x-0.5'}`} />
                 </button>
-                Schedule Online
+                Schedule {online ? 'Online' : 'Offline'}
               </label>
+              <button className="rounded-sm border border-gray-20 px-2 py-1">Learn More</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1">More Actions ▾</button>
               <button className="rounded-sm border border-gray-20 px-2 py-1">▽ Filter</button>
               <button
