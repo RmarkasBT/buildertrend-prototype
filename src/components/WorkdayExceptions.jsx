@@ -39,11 +39,14 @@ const BLANK = {
   applyToAll: true,
 }
 
-export default function WorkdayExceptions({ jobId, onChanged }) {
+export default function WorkdayExceptions({ jobId, onChanged, adding: addingProp, onAddingChange }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [adding, setAdding] = useState(false)
+  // Controlled by the page toolbar's "Add Workday Exception" button, since BT
+  // keeps one toolbar across tabs.
+  const adding = addingProp
+  const setAdding = onAddingChange
   const [form, setForm] = useState(BLANK)
   const [addingCategory, setAddingCategory] = useState(false)
   const [newCategory, setNewCategory] = useState('')
@@ -76,12 +79,13 @@ export default function WorkdayExceptions({ jobId, onChanged }) {
     setAddingCategory(false)
   }
 
-  const startAdd = () => {
+  // Reset the form whenever the toolbar opens it.
+  useEffect(() => {
+    if (!adding) return
     const today = todayIso()
     setForm({ ...BLANK, start: today, end: today })
-    setAdding(true)
     setError(null)
-  }
+  }, [adding])
 
   const save = () => {
     const { applyToAll, ...rest } = form
@@ -107,18 +111,10 @@ export default function WorkdayExceptions({ jobId, onChanged }) {
 
   return (
     <div className="mt-4">
-      <div className="flex items-start justify-between gap-4">
-        <p className="max-w-2xl text-sm text-gray-70">
-          Block out holidays and office closures, or open up a Saturday, without changing the
-          job's standard work week. Schedule dates are calculated around these.
-        </p>
-        <button
-          onClick={startAdd}
-          className="shrink-0 rounded-sm bg-brand-blue px-3 py-1.5 text-sm font-semibold text-white"
-        >
-          Add Workday Exception
-        </button>
-      </div>
+      <p className="max-w-2xl text-sm text-gray-70">
+        Block out holidays and office closures, or open up a Saturday, without changing the
+        job's standard work week. Schedule dates are calculated around these.
+      </p>
 
       {error && (
         <div className="mt-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">{error}</div>

@@ -56,6 +56,11 @@ export default function Schedule() {
   // BT offers the Phases grouping on the List view as well as the Gantt.
   const [listPhases, setListPhases] = useState(false)
   const [online, setOnline] = useState(false)
+  // BT keeps one page-level toolbar across all three tabs and swaps only its
+  // tab-specific actions, so the primary button lives here rather than inside
+  // each tab body. These counters/flags let it reach in.
+  const [setBaselineSignal, setSetBaselineSignal] = useState(0)
+  const [wxAdding, setWxAdding] = useState(false)
   // The job's working calendar, fetched so the browser derives dates the same
   // way the server does — otherwise the Gantt shades a hardcoded Mon-Fri while
   // the API cascades around real holidays.
@@ -158,68 +163,85 @@ export default function Schedule() {
         ))}
       </div>
 
+      {/* Page-level, on every tab — BT shows the offline warning on Baseline and
+          Workday Exceptions too, not only on Schedule. */}
+      {!online && (
+        <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
+          Your schedule is offline and is unavailable to subs and clients. Notifications will not be sent.
+        </div>
+      )}
+
+      {/* One toolbar for all tabs. Only the view toggle, the actions menu and the
+          primary button change with the tab. */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        {tab === 'Schedule' ? (
+          <div className="flex gap-1 rounded-sm border border-gray-20 text-sm">
+            {['Calendar', 'List', 'Gantt'].map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 ${view === v ? 'bg-gray-15 font-semibold' : ''}`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        ) : <div />}
+        <div className="flex flex-nowrap items-center gap-1.5 whitespace-nowrap text-sm">
+          <button className="rounded-sm border border-gray-20 px-2 py-1" title="Settings">⚙</button>
+          {tab === 'Schedule' && (
+            <button className="rounded-sm border border-gray-20 px-2 py-1" title="History">↺</button>
+          )}
+          <label className="flex cursor-pointer items-center gap-2 text-gray-70">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={online}
+              onClick={() => setOnline((v) => !v)}
+              className={`relative h-5 w-9 rounded-full transition-colors ${online ? 'bg-brand-blue' : 'bg-gray-25'}`}
+            >
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${online ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            </button>
+            Schedule {online ? 'Online' : 'Offline'}
+          </label>
+          <button className="rounded-sm border border-gray-20 px-2 py-1">Learn More</button>
+          {/* Baseline swaps More Actions for Export. */}
+          <button className="rounded-sm border border-gray-20 px-2 py-1">
+            {tab === 'Baseline' ? 'Export ▾' : 'More Actions ▾'}
+          </button>
+          <button className="rounded-sm border border-gray-20 px-2 py-1">▽ Filter</button>
+          {tab === 'Schedule' && (
+            <button
+              onClick={() => setAssistantOpen(true)}
+              className="rounded-sm border border-brand-blue px-3 py-1 font-semibold text-brand-blue"
+            >
+              ✨ AI Assistant
+            </button>
+          )}
+          <button
+            onClick={() => {
+              if (tab === 'Baseline') setSetBaselineSignal((n) => n + 1)
+              else if (tab === 'Workday Exceptions') setWxAdding(true)
+              else openCreate()
+            }}
+            className="rounded-sm bg-brand-blue px-3 py-1 font-semibold text-white"
+          >
+            {tab === 'Baseline' ? 'Set Baseline' : tab === 'Workday Exceptions' ? 'Add Workday Exception' : 'New Schedule Item'}
+          </button>
+        </div>
+      </div>
+
       {tab === 'Baseline' ? (
-        <BaselineView jobId={currentJob.id} />
+        <BaselineView jobId={currentJob.id} setSignal={setBaselineSignal} />
       ) : tab === 'Workday Exceptions' ? (
         <WorkdayExceptions
           jobId={currentJob.id}
+          adding={wxAdding}
+          onAddingChange={setWxAdding}
           onChanged={() => { loadCalendar(); refresh() }}
         />
-      ) : tab !== 'Schedule' ? (
-        <div className="mt-6 text-sm text-gray-50">No {tab.toLowerCase()} data yet.</div>
       ) : (
         <>
-          {!online && (
-            <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
-              Your schedule is offline and is unavailable to subs and clients. Notifications will not be sent.
-            </div>
-          )}
-
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex gap-1 rounded-sm border border-gray-20 text-sm">
-              {['Calendar', 'List', 'Gantt'].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1 ${view === v ? 'bg-gray-15 font-semibold' : ''}`}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-nowrap items-center gap-1.5 whitespace-nowrap text-sm">
-              <button className="rounded-sm border border-gray-20 px-2 py-1" title="Settings">⚙</button>
-              <button className="rounded-sm border border-gray-20 px-2 py-1" title="History">↺</button>
-              {/* A toggle whose LABEL reflects the current state, which is what
-                  BT's own screenshots show: "Schedule Offline" while off,
-                  "Schedule Online" once on. Not a fixed caption. */}
-              <label className="flex cursor-pointer items-center gap-2 text-gray-70">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={online}
-                  onClick={() => setOnline((v) => !v)}
-                  className={`relative h-5 w-9 rounded-full transition-colors ${online ? 'bg-brand-blue' : 'bg-gray-25'}`}
-                >
-                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${online ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                </button>
-                Schedule {online ? 'Online' : 'Offline'}
-              </label>
-              <button className="rounded-sm border border-gray-20 px-2 py-1">Learn More</button>
-              <button className="rounded-sm border border-gray-20 px-2 py-1">More Actions ▾</button>
-              <button className="rounded-sm border border-gray-20 px-2 py-1">▽ Filter</button>
-              <button
-                onClick={() => setAssistantOpen(true)}
-                className="rounded-sm border border-brand-blue px-3 py-1 font-semibold text-brand-blue"
-              >
-                ✨ AI Assistant
-              </button>
-              <button onClick={openCreate} className="rounded-sm bg-brand-blue px-3 py-1 font-semibold text-white">
-                New Schedule Item
-              </button>
-            </div>
-          </div>
-
           <div className="mt-3 flex items-center gap-3">
             <button onClick={() => setMonthOffset((o) => o - 1)}>‹</button>
             <div className="font-semibold text-gray-90">
@@ -230,13 +252,6 @@ export default function Schedule() {
               Today
             </button>
           </div>
-
-          {loading && <div className="mt-3 text-sm text-gray-50">Loading schedule…</div>}
-          {error && (
-            <div className="mt-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
-              Couldn't load the schedule: {error}
-            </div>
-          )}
 
           {conflicts.length > 0 && (
             <div className="mt-3 rounded-sm bg-warning-bg px-3 py-2 text-sm text-warning-fg">
@@ -257,9 +272,6 @@ export default function Schedule() {
             </div>
           )}
 
-          {/* A rejected write used to fail silently — the bar just snapped back
-              with no explanation. The server's message names the field or the
-              dependency loop, so show it verbatim. */}
           {writeError && (
             <div className="mt-3 flex items-start justify-between gap-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
               <span>Couldn't save that change: {writeError}</span>
@@ -267,8 +279,6 @@ export default function Schedule() {
             </div>
           )}
 
-          {/* One click reverts every item the last cascade touched. Undo has to
-              be this reachable, or nobody risks a change that moves 9 bars. */}
           {lastChangeSet && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-sm bg-info-bg px-3 py-2 text-sm text-gray-80">
               <span>
@@ -286,6 +296,13 @@ export default function Schedule() {
               >
                 Undo
               </button>
+            </div>
+          )}
+
+          {loading && <div className="mt-3 text-sm text-gray-50">Loading schedule…</div>}
+          {error && (
+            <div className="mt-3 rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger-fg">
+              Couldn't load the schedule: {error}
             </div>
           )}
 

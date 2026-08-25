@@ -35,7 +35,7 @@ function Chip({ label, value, tone = 'text-gray-70' }) {
   )
 }
 
-export default function BaselineView({ jobId }) {
+export default function BaselineView({ jobId, setSignal = 0 }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -53,6 +53,13 @@ export default function BaselineView({ jobId }) {
   }, [jobId])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // The Set Baseline button lives in the page toolbar (BT keeps one toolbar
+  // across tabs), so it reaches in via a counter rather than a callback.
+  useEffect(() => {
+    if (setSignal > 0) set()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSignal])
 
   const set = () => {
     setBusy(true)
@@ -82,13 +89,11 @@ export default function BaselineView({ jobId }) {
             A baseline freezes the schedule as agreed, so you can see where the job has drifted
             from the original plan. Set it once the initial schedule is complete.
           </p>
-          <button
-            onClick={set}
-            disabled={busy}
-            className="mt-4 rounded-sm bg-brand-blue px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-60"
-          >
-            {busy ? 'Setting…' : 'Set Baseline'}
-          </button>
+          {/* No button here: Set Baseline lives in the page toolbar, and two
+              identical primary buttons a few inches apart is worse than one. */}
+          <p className="mt-3 text-xs text-gray-50">
+            {busy ? 'Setting…' : 'Use Set Baseline above to capture the current schedule.'}
+          </p>
         </div>
       ) : (
         <>
@@ -100,13 +105,7 @@ export default function BaselineView({ jobId }) {
                 {baseline.itemCount} item{baseline.itemCount === 1 ? '' : 's'}
               </div>
             </div>
-            <button
-              onClick={set}
-              disabled={busy}
-              className="shrink-0 rounded-sm border border-gray-20 px-3 py-1.5 text-sm text-gray-70 disabled:opacity-60"
-            >
-              {busy ? 'Setting…' : 'Re-set Baseline'}
-            </button>
+            {busy && <span className="shrink-0 text-sm text-gray-50">Setting…</span>}
           </div>
 
           {/* The headline: has the finish date moved? Everything else is detail. */}
